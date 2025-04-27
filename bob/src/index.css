@@ -66,3 +66,7 @@ button:focus-visible {
   color: black;
   text-align: center;
 }
+
+.text-center.mb-10 {
+  margin-top: 6%;
+}

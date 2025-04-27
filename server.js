@@ -6,13 +6,42 @@ const puppeteer = require('puppeteer');
 const { JSDOM } = require('jsdom');
 const { Readability } = require('@mozilla/readability');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const morgan = require('morgan');
+const fs = require('fs');
+const https = require('https');
 require('dotenv').config();
 
+const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001'];
+
 const app = express();
-app.use(cors());
 const port = process.env.PORT || 3001;
 
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like from Postman or Curl)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
+  methods: ['POST'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+
+// For HTTPS setup, uncomment the following lines and provide your certificate files
+// const options = {
+//   key: fs.readFileSync(''), // Certbot private key
+//   cert: fs.readFileSync(''), // Certbot certificate
+//   ca: fs.readFileSync(''), // Optional: if you have a chain file (some setups may include this)
+// };
+
+app.use(cors(corsOptions));
+
 app.use(bodyParser.json());
+app.use(morgan('combined'));
 
 // OpenAI setup
 const OpenAI = require('openai');
@@ -24,11 +53,30 @@ const openai = new OpenAI({
 const SERP_API_KEY = process.env.SERP_API_KEY;
 const SERP_API_ENDPOINT = 'https://serpapi.com/search.json';
 
+// Create a rate limiter
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  message: "Too many requests, please try again later.",
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+// Apply the rate limiter to all requests
+app.use(limiter);
+
+
 // ===== MAIN ANALYZE ENDPOINT =====
 app.post("/analyze", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "No URL provided" });
+    const validator = require('validator');
+
+    // Check if URL is valid
+    if (!url || !validator.isURL(url)) {
+      return res.status(400).json({ error: "Invalid URL provided" });
+    }
 
     const keyword = await extractKeywords(url);
     const relatedArticles = await fetchRelatedArticles(keyword, url);
@@ -259,3 +307,19 @@ async function analyzeArticlesWithAI(articles) {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
+
+// For HTTPS setup, uncomment the following lines and provide your certificate files
+
+// // Start the HTTPS server
+// https.createServer(options, app).listen(port, () => {
+//   console.log(`HTTPS server is running on https://localhost:${port}`);
+// });
+
+// // Redirect HTTP traffic to HTTPS
+// http.createServer((req, res) => {
+//   res.writeHead(301, { "Location": `https://${req.headers['host']}${req.url}` });
+//   res.end();
+// }).listen(80, () => {
+//   console.log('HTTP server is running on http://localhost:80 (redirecting to HTTPS)');
+// });
