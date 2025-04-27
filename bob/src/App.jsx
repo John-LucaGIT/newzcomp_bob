@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ClipLoader } from 'react-spinners';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm'; // 👈 ADD THIS IMPORT
+import remarkGfm from 'remark-gfm';
 
 function App() {
   const [url, setUrl] = useState('');
@@ -9,6 +9,11 @@ function App() {
   const [relatedArticles, setRelatedArticles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [analyzed, setAnalyzed] = useState(false);
+
+  function cleanMarkdown(markdown) {
+    // Remove ```markdown at the start and ``` at the end
+    return markdown.replace(/^```markdown\s*/, '').replace(/```$/, '');
+  }
 
   const handleUrlChange = (e) => {
     setUrl(e.target.value);
@@ -30,7 +35,9 @@ function App() {
 
       if (response.ok) {
         const data = await response.json();
-        setMarkdownContent(data.analysis);
+        const cleanedMarkdown = cleanMarkdown(data.analysis); // Clean the markdown
+
+        setMarkdownContent(cleanedMarkdown); // Update state
         setRelatedArticles(data.related_articles);
         setAnalyzed(true);
       } else {
@@ -52,7 +59,6 @@ function App() {
           <p className="text-gray-600 text-lg max-w-xl mx-auto">Bob analyzes news articles for bias, summarizes the story, and finds related coverage. Enter a URL below!</p>
         </div>
       )}
-
       <div className="w-full max-w-2xl flex flex-col items-center space-y-4">
         <input type="text" placeholder="Paste article URL here..." value={url} onChange={handleUrlChange} className="w-full p-4 text-lg rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none bg-white shadow-md" />
 
@@ -60,14 +66,12 @@ function App() {
           {loading ? 'Analyzing...' : 'Analyze with Bob'}
         </button>
       </div>
-
       {loading && (
         <div className="mt-10">
           <ClipLoader size={50} color="#3B82F6" />
           <p className="mt-4 text-gray-500">Bob is analyzing the article...</p>
         </div>
       )}
-
       {analyzed && (
         <div className="mt-16 w-full max-w-5xl">
           <div className="prose prose-lg max-w-none bg-white p-10 rounded-2xl shadow-xl overflow-x-auto break-words">
@@ -76,7 +80,6 @@ function App() {
               components={{
                 h1: ({ node, ...props }) => <h1 className="text-4xl font-bold mt-8 mb-4" {...props} />,
                 h2: ({ node, ...props }) => <h2 className="text-3xl font-semibold mt-6 mb-3" {...props} />,
-                h3: ({ node, ...props }) => <h3 className="text-2xl font-semibold mt-4 mb-2" {...props} />,
                 p: ({ node, ...props }) => <p className="mb-4 text-gray-700" {...props} />,
                 li: ({ node, ...props }) => <li className="ml-6 list-disc" {...props} />,
                 strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,

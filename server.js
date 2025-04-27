@@ -6,28 +6,23 @@ const puppeteer = require('puppeteer');
 const { JSDOM } = require('jsdom');
 const { Readability } = require('@mozilla/readability');
 const cors = require('cors');
-
-
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
-
 const port = process.env.PORT || 3001;
 
-// Setup Middleware
 app.use(bodyParser.json());
 
-// Setup OpenAI
+// OpenAI setup
 const OpenAI = require('openai');
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-
-// NewsAPI
-const NEWS_API_KEY = process.env.NEWS_API_KEY;
-const NEWS_API_ENDPOINT = 'https://newsapi.org/v2/everything';
+// SerpAPI setup
+const SERP_API_KEY = process.env.SERP_API_KEY;
+const SERP_API_ENDPOINT = 'https://serpapi.com/search.json';
 
 // ===== MAIN ANALYZE ENDPOINT =====
 app.post("/analyze", async (req, res) => {
@@ -35,19 +30,31 @@ app.post("/analyze", async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "No URL provided" });
 
-    const keyword         = await extractKeywords(url);
+    const keyword = await extractKeywords(url);
     const relatedArticles = await fetchRelatedArticles(keyword, url);
+    console.log('Related Articles:', relatedArticles);
+    if (!relatedArticles.length) {
+      return res.status(404).json({ error: "No related articles found" });
+    }
     const scrapedArticles = await scrapeArticles(relatedArticles);
-    // return res.json({ scrapedArticles });
-    const analysis        = await analyzeArticlesWithAI(scrapedArticles);
-
-    res.json({ analysis });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
+    console.log('Scraped Articles:', scrapedArticles);
+    if (!scrapedArticles.length) {
+      return res.status(404).json({ error: "No articles scraped" });
+    }
+    res.json({
+        analysis,
+        related_articles: scrapedArticles.map(article => ({
+          source: article.source,
+          title: article.title,
+          url: article.url,
+          content: article.text
+        }))
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
 // ===== Helper Functions =====
 
@@ -75,31 +82,17 @@ async function getArticleInfo(url) {
 
 // 2. Generate search query using OpenAI
 async function generateSearchQueryFromArticle({ title, description }) {
-  console.log('Generating search query from article:', { title, description });
   const prompt = `
-  You are a news search expert.
+You are a news search expert.
 
-  Given the following article title and description, create a string of KEYWORDS that captures the **topic** or **headline** of the article. This query will be used to find **related articles from different news sources** with potentially different perspectives. Focus on the **most important topics and keywords**, removing any redundant or overly specific terms. Use operators like quotes ("") for phrases, AND, OR, NOT if needed. The goal is to make the query **as concise as possible** while still capturing the key ideas.
-  For example if the title is: "Wisconsin judge’s arrest for alleged ICE interference is ‘fueling both parties,’ says Stef Kight" the keyword could be: "Wisconsin AND judge AND "ICE" AND ARREST", please feel free to include variations of acceptable keyword searches by using the OR operator.
+Given the following article title and description, create a string of KEYWORDS that captures the **topic** of the article.
+Use operators like quotes ("") for phrases, AND, OR, NOT if needed.
+Keep it under 500 characters.
 
-  Here is the format that is allowed for keyword:
+TITLE: "${title}"
+DESCRIPTION: "${description}"
 
-  Keywords or phrases to search for in the article title and body.
-
-  Advanced search is supported here:
-
-  Surround phrases with quotes (") for exact match.
-  Prepend words or phrases that must appear with a + symbol. Eg: +bitcoin
-  Prepend words that must not appear with a - symbol. Eg: -bitcoin
-  Alternatively you can use the AND / OR / NOT keywords, and optionally group these with parenthesis. Eg: crypto AND (ethereum OR litecoin) NOT bitcoin.
-
-  Keep it under 500 characters.
-
-  TITLE: "${title}"
-  DESCRIPTION: "${description}"
-
-
-  Return only the search query, nothing else.
+Return only the search query, nothing else.
 `;
 
   const gptResponse = await openai.chat.completions.create({
@@ -124,55 +117,63 @@ async function extractKeywords(url) {
   return searchQuery || articleInfo.title;
 }
 
-function normalizeUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.origin + u.pathname; // Ignore query parameters, fragments, etc.
-  } catch (e) {
-    return url; // If parsing fails, fallback to raw URL
-  }
-}
-
-// 4. Fetch related articles
+// 4. Fetch related articles (using SerpAPI instead of NewsAPI)
 async function fetchRelatedArticles(keyword, sourceUrl) {
   try {
-    const response = await axios.get(NEWS_API_ENDPOINT, {
+    const response = await axios.get(SERP_API_ENDPOINT, {
       params: {
         q: keyword,
-        apiKey: NEWS_API_KEY,
-        sortBy: "relevancy",
-        pageSize: 10, // fetch 10 to pick best 4 later
-      },
+        tbm: 'nws', // Target Google News
+        api_key: SERP_API_KEY,
+        num: 10
+      }
     });
 
-    let articles = response.data.articles || [];
+    const serpArticles = response.data.news_results || [];
 
-    // Check if the source article URL is already in the list
-    const found = articles.some(article => normalizeUrl(article.url) === normalizeUrl(sourceUrl));
+    const articles = serpArticles.map(article => ({
+      source: { name: article.source },
+      title: article.title,
+      url: article.link,
+      publishedAt: article.date || new Date().toISOString(),
+      content: article.snippet || "",
+    }));
+
+    // Add the original source article if not included
+    const found = articles.some(a => normalizeUrl(a.url) === normalizeUrl(sourceUrl));
 
     if (!found) {
-      // If not found, manually add a placeholder article for the source URL
       articles.unshift({
         source: { name: "Source Article" },
         title: "Source Article",
         url: sourceUrl,
         publishedAt: new Date().toISOString(),
-        content: "" // We'll scrape the real content later
+        content: "" // We'll scrape this manually later
       });
     }
 
     return articles;
   } catch (error) {
-    console.error('Error fetching related articles:', error.message);
+    console.error('Error fetching related articles (SerpAPI):', error.message);
     return [];
   }
 }
-// 5. Scrape articles (basic for MVP)
+
+// 5. Normalize URL (remove query params etc.)
+function normalizeUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch (e) {
+    return url;
+  }
+}
+
+// 6. Scrape articles (basic for MVP)
 async function scrapeArticles(relatedArticles) {
   const max = 4;
   const out = [];
 
-  // Scrape and add related articles (up to max number)
   for (let art of relatedArticles.slice(0, max)) {
     const fullText = await fetchFullArticleText(art.url);
     out.push({
@@ -180,101 +181,70 @@ async function scrapeArticles(relatedArticles) {
       title: art.title,
       url: art.url,
       date: art.publishedAt,
-      text: fullText || ""  // Always use the scraped version
+      text: fullText || ""
     });
   }
 
   return out;
 }
 
-
 async function fetchFullArticleText(url) {
   try {
-    // 1. Fetch raw HTML
     const { data: html } = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     });
 
-    // 2. Parse with JSDOM
-    const dom = new JSDOM(html, {
-      url,
-      contentType: 'text/html'
-    });
-
-    // 3. Run Readability
+    const dom = new JSDOM(html, { url, contentType: 'text/html' });
     const reader = new Readability(dom.window.document);
     const article = reader.parse();
 
-    // 4. Get first 200 words of article
     const first200Words = article?.textContent?.split(/\s+/).slice(0, 200).join(' ');
-
-    return first200Words || null; // Return the first 200 words
+    return first200Words || null;
   } catch (err) {
     console.error(`Error fetching article content from ${url}:`, err.message);
     return null;
   }
 }
 
-
-// 6. Analyze articles with OpenAI
+// 7. Analyze articles with OpenAI
 async function analyzeArticlesWithAI(articles) {
-  // Build a cleaner JSON snippet:
   const payload = articles.map(a => ({
     source: a.source,
-    title:  a.title,
-    text:   a.text.slice(0, 40_000)  // truncate to ~40k chars to stay under token limits
+    title: a.title,
+    text: a.text.slice(0, 40_000)
   }));
 
   const prompt = `
-  Your name is Bob, you are a professional news analyst trained to detect Bias. Your main goal is to state the facts of some news story and point out biases and language that lead readers to a certain conclusion. Given x news sources you will provide a summary of the facts (what all sources have in common and what seems to be factually accurate) and you may point out the biases of the different sources.
-
-  Your output should be structured as such:
+  Your name is Bob, you are a professional news analyst trained to detect Bias.
 
   **Bob's Summary:**
   (((Summary of the story)))
 
-  **Bob's Bias Analysis:**
-
-  Includes a Bias Rating:
-    Create a numeric bias rating between 0 and 5.".
-
-    bias_rating:
-
-    - 0 = No bias (Neutral)
-    - 1–2 = Slight bias
-    - 3–4 = Noticeable bias
-    - 5 = Strong bias
-
-  A bias direction:
-    Can be one of the following:
-
-    "left" (liberal/progressive leaning)
-    "right" (conservative leaning)
-    "neutral" (no clear political leaning)
-
-  The analysis should be structured as such:
-
+  **Bob's Bias Analysis:** (Do this for each source)
   - Source: [source name]
   - Title: [title]
   - Bias Rating: [0-5] and Bias Direction: [left/right/neutral]
-  - Bias Analysis: [analysis of the article, including quotes and language that is biased with the explanation of why it is biased]
+  - Bias Analysis: [analysis]
 
   **What the sources agree on:**
-  (((This section should include facts on what all sources agree on regardless of what they lean towards)))
+  (((Facts all sources agree on)))
 
-  If you suspect one of the articles is reporting on something else entirley, please omit it and any related analysis from the output.
+  **Bob's Conclusion:**
+  (((Conclusion based on the analysis, provide an in-depth conclusion of your analysis, explain your reasoning and how you arrived at your conclusion as well as the reasoning for your ratings.)))
+  **Bob's Recommendations:**
+  (((Recommendations for the reader)))
 
-  Here are the articles (JSON array of {source, title, text}):
+  Here are the articles:
 
   ${JSON.stringify(payload, null, 2)}
 
   Return a structured report in Markdown.
 `;
+  console.log('Prompt for OpenAI:', prompt);
+  console.log('Payload for OpenAI:', payload);
 
   const resp = await openai.chat.completions.create({
-    model:    "gpt-4o",
+    model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
   });
 
@@ -283,7 +253,6 @@ async function analyzeArticlesWithAI(articles) {
   }
   return resp.choices[0].message.content.trim();
 }
-
 
 // ===== Start the server =====
 app.listen(port, () => {
