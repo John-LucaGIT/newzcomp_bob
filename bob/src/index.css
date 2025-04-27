@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+}
+
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light dark;
+  color: rgba(0, 0, 0, 0.87);
+  background-color: #f5f5f5;
+}
+
+a {
+  color: #5c6ac4;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #3e4c8d;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+  background-color: #f9f9fb;
+  font-family: "Inter", sans-serif;
+}
+
+h1 {
+  font-size: 2.5rem;
+}
+
+button:focus-visible {
+  outline: 2px solid rgba(79, 70, 229, 0.5);
+}
+
+.input.inputfield {
+  fill: white;
+  background-color: white;
+  width: 100%;
+  border: none;
+  height: 2rem;
+  font-size: 1rem;
+  color: black;
+  text-align: center;
+}
