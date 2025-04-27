@@ -29,6 +29,10 @@ NewzComp Bob is a web application designed to analyze news articles for bias and
 3. The content of the related articles is scraped and analyzed using OpenAI.
 4. The frontend displays the analysis, including a summary of the facts, bias ratings, and bias analysis.
 
+## Try it out
+
+- https://bob.newzcomp.com
+
 ## Installation
 
 1. Clone the repository:
