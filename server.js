@@ -41,6 +41,7 @@ app.post("/analyze", async (req, res) => {
     if (!scrapedArticles.length) {
       return res.status(404).json({ error: "No articles scraped" });
     }
+    const analysis = await analyzeArticlesWithAI(scrapedArticles);
     res.json({
         analysis,
         related_articles: scrapedArticles.map(article => ({

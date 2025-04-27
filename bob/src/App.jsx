@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ClipLoader } from 'react-spinners';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import '@fortawesome/fontawesome-free/css/all.min.css';
 
 function App() {
   const [url, setUrl] = useState('');
@@ -53,12 +54,46 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-6 py-12">
-      {!analyzed && (
+      <header className="fixed top-2 left-1/2 transform -translate-x-1/2 bg-white shadow-md z-50 rounded-xl max-w-5xl w-full px-6 py-4">
+        <div className="flex items-center justify-between">
+          {/* Logo and Return Link */}
+          <div className="flex items-center space-x-4">
+            <img
+              src="/assets/tricolorblack.svg" // Replace with your logo path
+              alt="NewzComp Logo"
+              className="h-10 w-10"
+            />
+            <a href="https://newzcomp.com/" className="text-md font-semibold text-gray-800 hover:text-blue-600 transition">
+              Return to NewzComp
+            </a>
+          </div>
+
+          {/* Social Links */}
+          <div className="flex items-center space-x-4">
+            {/* Twitter */}
+            <a href="https://twitter.com/newzcomp" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-blue-400 transition">
+              <i className="fab fa-twitter text-xl"></i>
+            </a>
+
+            {/* Instagram */}
+            <a href="https://www.instagram.com/newzcomp" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-pink-500 transition">
+              <i className="fab fa-instagram text-xl"></i>
+            </a>
+
+            {/* LinkedIn */}
+            <a href="https://www.linkedin.com/company/newzcomp" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-blue-600 transition">
+              <i className="fab fa-linkedin text-xl"></i>
+            </a>
+          </div>
+        </div>
+      </header>
+      {/* Main Content */}
+      {
         <div className="text-center mb-10">
           <h1 className="text-5xl font-bold text-gray-800 mb-4">Meet Bob</h1>
           <p className="text-gray-600 text-lg max-w-xl mx-auto">Bob analyzes news articles for bias, summarizes the story, and finds related coverage. Enter a URL below!</p>
         </div>
-      )}
+      }
       <div className="w-full max-w-2xl flex flex-col items-center space-y-4">
         <input type="text" placeholder="Paste article URL here..." value={url} onChange={handleUrlChange} className="w-full p-4 text-lg rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none bg-white shadow-md" />
 
@@ -67,9 +102,11 @@ function App() {
         </button>
       </div>
       {loading && (
-        <div className="mt-10">
-          <ClipLoader size={50} color="#3B82F6" />
-          <p className="mt-4 text-gray-500">Bob is analyzing the article...</p>
+        <div className="flex items-center justify-center w-full h-full absolute top-0 left-0 bg-gray-100">
+          <div className="text-center">
+            <ClipLoader size={50} color="#3B82F6" />
+            <p className="mt-4 text-gray-500">Bob is analyzing the article...</p>
+          </div>
         </div>
       )}
       {analyzed && (
