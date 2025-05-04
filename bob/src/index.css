@@ -68,5 +68,16 @@ button:focus-visible {
 }
 
 .text-center.mb-10 {
-  margin-top: 6%;
+  margin-top: 5%;
+}
+
+.backtonewzcomp{
+  margin-left: auto;
+  margin-right: 5%;
+}
+
+.custom-flex-nc{
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 4%;
 }
