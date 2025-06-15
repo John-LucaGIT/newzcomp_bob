@@ -12,12 +12,12 @@ const pool = mariadb.createPool({
      connectionLimit: 5
 });
 
-async function asyncFunction(title, analysis, source_name, source_url) {
+async function asyncFunction(title, analysis, source_name, source_url, keyword) {
   let conn;
   try {
     conn = await pool.getConnection();
-    const res = await conn.query("INSERT INTO historic_analysis (title, analysis, source_name, source_url) VALUES (?, ?, ?, ?)",
-      [title, JSON.stringify(analysis), source_name, source_url]);
+    const res = await conn.query("INSERT INTO historic_analysis (title, analysis, source_name, source_url, keyword) VALUES (?, ?, ?, ?, ?)",
+      [title, JSON.stringify(analysis), source_name, source_url, keyword]);
     console.log(res);
 
   } catch (err) {
@@ -31,7 +31,7 @@ async function getHistoricArticleMetadata() {
   let conn;
   try {
     conn = await pool.getConnection();
-    const res = await conn.query("SELECT bobid, title, query_date, source_name, source_url FROM historic_analysis");
+    const res = await conn.query("SELECT bobid, title, query_date, source_name, source_url, keyword FROM historic_analysis");
     return res;
   } catch (err) {
     console.error("Error fetching historic article metadata:", err);
@@ -46,7 +46,7 @@ async function getHistoricArticleById(bobid) {
   try {
     conn = await pool.getConnection();
     console.log("Fetching article with ID:", bobid);
-    const res = await conn.query("SELECT bobid, title, analysis, query_date, source_name, source_url FROM historic_analysis WHERE bobid = ?", [bobid]);
+    const res = await conn.query("SELECT bobid, title, analysis, query_date, source_name, source_url, keyword FROM historic_analysis WHERE bobid = ?", [bobid]);
     return res[0];
   } catch (err) {
     console.error("Error fetching historic article by ID:", err);

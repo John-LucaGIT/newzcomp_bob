@@ -14,18 +14,17 @@ require('dotenv').config();
 const twilio = require('twilio');
 const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
 const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, closePool } = require('./dbconnect');
-
-const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173'];
-
+const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com'];
 const app = express();
 const port = process.env.PORT || 3001;
-
+const { utils } = require('./utils');
+const HOST = '192.168.86.248';
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like from Postman or Curl)
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.error(`CORS error: Origin ${origin} not allowed`);
       callback(new Error('Not allowed by CORS'), false);
     }
   },
@@ -55,6 +54,9 @@ const openai = new OpenAI({
 const SERP_API_KEY = process.env.SERP_API_KEY;
 const SERP_API_ENDPOINT = 'https://serpapi.com/search.json';
 
+// Load allowed domains from JSON file
+const allowedDomains = require('./config.json');
+
 // Create a rate limiter
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -77,6 +79,38 @@ app.post('/analyze', async (req, res) => {
     // Check if URL is valid
     if (!url || !validator.isURL(url)) {
       return res.status(400).json({ error: 'Invalid URL provided' });
+    }
+
+    const submittedDomain = new URL(url).hostname.replace(/^www\./, '');
+    const isAllowed = allowedDomains.some((domain) => submittedDomain.endsWith(domain));
+
+    if (!isAllowed) {
+      const messageBody = `
+      🚫 NewzComp - Unsupported Domain Attempt
+
+      A user attempted to analyze an article from an unsupported domain.
+
+      🕒 ${new Date().toLocaleString()}
+      🌐 IP: ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}
+      📱 UA: ${req.headers['user-agent'] || 'Unknown'}
+      📦 Payload: ${JSON.stringify(req.body, null, 2).slice(0, 400)}
+      ❌ Requested Domain: ${submittedDomain}
+      ❌ Requested URL: ${url}
+      `.trim();
+
+      htmlText = `
+        <h1>NewzComp - Unsupported Domain Attempt</h1>
+        <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>IP:</strong> ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}</p>
+        <p><strong>User Agent:</strong> ${req.headers['user-agent'] || 'Unknown'}</p>
+        <p><strong>Payload:</strong> ${JSON.stringify(req.body, null, 2).slice(0, 400)}</p>
+        <p><strong>Requested Domain:</strong> ${submittedDomain}</p>
+        <p><strong>Requested URL:</strong> ${url}</p>
+      `;
+
+      await utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob Unsupported Domain Attempt 🚫', messageBody, htmlText);
+
+      return res.status(403).json({ error: `Domain not allowed for analysis: ${submittedDomain}` });
     }
 
     const keyword = await extractKeywords(url);
@@ -116,7 +150,7 @@ app.post('/analyze', async (req, res) => {
     };
     console.log('Saving to DB:', { title, analysisData, source_url });
     try {
-      await asyncFunction(title, analysisData, source_name, source_url);
+      await asyncFunction(title, analysisData, source_name, source_url, keyword);
       console.log('Data saved to DB');
     } catch (err) {
       console.error('Error saving to DB:', err);
@@ -144,33 +178,134 @@ app.post('/analyze', async (req, res) => {
 
       🔑 Generated Search Query: ${keyword}
 
-      📊 Bob's Analysis: ${analysis.slice(0, 800)}...
+      📊 Bob's Analysis: ${analysis}
     `.trim();
 
-    // try {
-    //   await client.messages.create({
-    //     body: messageBody,
-    //     from: process.env.TWILIO_PHONE_FROM,
-    //     to: process.env.TWILIO_PHONE_TO,
-    //   });
-    //   console.log('Twilio notification sent.');
-    // } catch (err) {
-    //   console.error('Failed to send Twilio SMS:', err.message);
-    // }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    htmlText = `
+      <h1>NewzComp Analysis Request</h1>
+      <p><strong>Endpoint:</strong> /analyze</p>
+      <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+      <p><strong>IP:</strong> ${requestIP}</p>
+      <p><strong>User Agent:</strong> ${userAgent}</p>
+      <p><strong>Payload:</strong> ${cleanedBody}</p>
+      <p><strong>Response Status:</strong> ${responseStatus}</p>
+      <p><strong>Response Time:</strong> ${responseTime}</p>
+      <p><strong>Generated Search Query:</strong> ${keyword}</p>
+      <p><strong>Bob's Analysis:</strong> ${analysis}</p>
+    `;
+
+    await utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob API Notification ✔', messageBody, htmlText);
+  } catch (error) {
+    console.error('Error in /analyze endpoint:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ===== FEEDBACK ENDPOINT =====
+
+app.post('/feedback', async (req, res) => {
+  const { name, email, message } = req.body;
+  const userAgent = req.headers['user-agent'] || 'Unknown';
+  const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+
+  if (!name || !email || !message) {
+    return res.status(400).json({ error: 'All fields are required.' });
+  }
+
+  const messageBody = `
+    📝 NewzComp Feedback
+
+    🕒 ${new Date().toLocaleString()}
+    🌐 IP: ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}
+    📱 UA: ${req.headers['user-agent'] || 'Unknown'}
+
+    👤 Name: ${name}
+    📧 Email: ${email}
+    💬 Message: ${message}
+  `.trim();
+
+  const htmlText = `
+    <h1>NewzComp Feedback</h1>
+    <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+    <p><strong>IP:</strong> ${requestIP}</p>
+    <p><strong>User Agent:</strong> ${userAgent}</p>
+    <p><strong>Name:</strong> ${name}</p>
+    <p><strong>Email:</strong> ${email}</p>
+    <p><strong>Message:</strong> ${message}</p>
+  `;
+
+  await utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob Feedback Notification ✔', messageBody, htmlText);
+
+  res.json({ success: true, message: 'Feedback submitted successfully.' });
+});
+
+// ===== LATEST BREAKING NEWS ENDPOINT =====
+const fetch = require('node-fetch');
+const { parseStringPromise } = require('xml2js');
+
+app.get('/latest', async (req, res) => {
+  try {
+    // Fetch breaking news feed from Google News
+    const feedRes = await fetch('https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en');
+    const xml = await feedRes.text();
+
+    // Parse the RSS feed
+    const parsed = await parseStringPromise(xml);
+    const items = parsed.rss.channel[0].item;
+
+    if (!items || items.length === 0) {
+      return res.status(404).json({ error: 'No articles found in feed' });
+    }
+
+    // Take the first 3 article URLs
+    const topArticles = items.slice(0, 3).map((item) => ({
+      title: item.title[0],
+      url: item.link[0],
+    }));
+
+    // console.log('Top 3 breaking news articles:', topArticles);
+
+    // Scrape the full content of those articles
+    const scrapedArticles = await scrapeArticles(
+      topArticles.map((a) => ({
+        source: { name: new URL(a.url).hostname.replace('www.', '') },
+        title: a.title,
+        url: a.url,
+        publishedAt: new Date().toISOString(),
+        content: '', // will be scraped
+      }))
+    );
+
+    if (!scrapedArticles.length) {
+      return res.status(404).json({ error: 'No articles could be scraped' });
+    }
+
+    // Analyze using your AI
+    const analysis = await analyzeArticlesWithAI(scrapedArticles);
+
+    // Return the analysis + scraped articles
+    return res.json({
+      analysis,
+      related_articles: scrapedArticles.map((article) => ({
+        source: article.source,
+        title: article.title,
+        url: article.url,
+        content: article.text,
+      })),
+    });
+  } catch (error) {
+    console.error('Error in /latest endpoint:', error.message);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // ===== Get All Article Metadata =====
 
-
 // Endpoint to get metadata for all articles
 app.get('/articles', async (req, res) => {
   try {
     let articles = await getHistoricArticleMetadata(); // Fetch all articles metadata from the database
-    articles = articles.map(article => ({
+    articles = articles.map((article) => ({
       ...article,
       bobid: article.bobid?.toString(),
     }));
@@ -222,26 +357,26 @@ async function getArticleInfo(url) {
 // 2. Generate search query using OpenAI
 async function generateSearchQueryFromArticle({ title, description }) {
   const prompt = `
-You are a news search expert.
+    You are a news search expert.
 
-Given the following article title and description, create a string of KEYWORDS that captures the **topic** of the article.
-Use operators like quotes ("") for phrases, AND, OR, NOT if needed.
-Keep it under 500 characters.
+    Given the following article title and description, create a string of KEYWORDS that captures the **topic** of the article.
+    Use operators like quotes ("") for phrases, AND, OR, NOT if needed.
+    Keep it under 500 characters.
 
-TITLE: "${title}"
-DESCRIPTION: "${description}"
+    TITLE: "${title}"
+    DESCRIPTION: "${description}"
 
-Return only the search query, nothing else.
-`;
+    Return only the search query, nothing else.
+  `;
 
   const gptResponse = await openai.chat.completions.create({
     model: 'gpt-4.1-mini',
     messages: [{ role: 'user', content: prompt }],
   });
-  console.log('GPT Response:', gptResponse);
+  // console.log('GPT Response:', gptResponse);
 
   const searchQuery = gptResponse.choices[0].message.content.trim();
-  console.log('Generated Search Query:', searchQuery);
+  // console.log('Generated Search Query:', searchQuery);
   return searchQuery;
 }
 
@@ -270,22 +405,33 @@ async function fetchRelatedArticles(keyword, sourceUrl) {
 
     const serpArticles = response.data.news_results || [];
 
-    const articles = serpArticles.map((article) => ({
-      source: { name: article.source },
-      title: article.title,
-      url: article.link,
-      publishedAt: article.date || new Date().toISOString(),
-      content: article.snippet || '',
-    }));
+    // Only include articles whose domain is in the allowedDomains whitelist
+    const articles = serpArticles
+      .filter((article) => {
+        try {
+          const domain = new URL(article.link).hostname.replace(/^www\./, '');
+          return allowedDomains.some((allowed) => domain.endsWith(allowed));
+        } catch {
+          return false;
+        }
+      })
+      .map((article) => ({
+        source: { name: article.source },
+        title: article.title,
+        url: article.link,
+        publishedAt: article.date || new Date().toISOString(),
+        content: article.snippet || '',
+      }));
 
-    // Add the original source article if not included
+    // Add the original source article if not included and if it's in the whitelist
+    const sourceDomain = new URL(sourceUrl).hostname.replace(/^www\./, '');
+    const isSourceAllowed = allowedDomains.some((allowed) => sourceDomain.endsWith(allowed));
     const found = articles.some((a) => normalizeUrl(a.url) === normalizeUrl(sourceUrl));
 
-    if (!found) {
+    if (!found && isSourceAllowed) {
       const { title, description } = await getArticleInfo(sourceUrl);
-      const sourceName = new URL(sourceUrl).hostname.replace('www.', '');
       articles.unshift({
-        source: { name: sourceName },
+        source: { name: sourceDomain },
         title: title || 'Source Article',
         url: sourceUrl,
         publishedAt: new Date().toISOString(),
@@ -381,7 +527,6 @@ async function analyzeArticlesWithAI(articles) {
 
   Return a structured report in Markdown.
 `;
-  console.log('Prompt for OpenAI:', prompt);
   console.log('Payload for OpenAI:', payload);
 
   const resp = await openai.chat.completions.create({
@@ -395,16 +540,6 @@ async function analyzeArticlesWithAI(articles) {
   return resp.choices[0].message.content.trim();
 }
 
-// ===== Start the server =====
-// app.listen(port, () => {
-//   console.log(`Server running on port ${port}`);
-// });
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on http://0.0.0.0:${PORT}`);
-});
-
-
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down server...');
@@ -415,6 +550,11 @@ process.on('SIGINT', async () => {
     console.error('Error closing database connection pool:', err.message);
   }
   process.exit(0);
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, HOST, () => {
+  console.log(`Server running at http://${HOST}:${PORT}`);
 });
 
 // For HTTPS setup, uncomment the following lines and provide your certificate files

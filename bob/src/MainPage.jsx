@@ -33,6 +33,8 @@ function MainPage() {
   const [relatedArticles, setRelatedArticles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [analyzed, setAnalyzed] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const API_BASE = import.meta.env.VITE_API_BASE;
 
   function cleanMarkdown(markdown) {
     return markdown.replace(/^```markdown\s*/, '').replace(/```$/, '');
@@ -40,6 +42,7 @@ function MainPage() {
 
   const handleUrlChange = (e) => {
     setUrl(e.target.value);
+    setErrorMsg('');
   };
 
   useEffect(() => {
@@ -60,7 +63,7 @@ function MainPage() {
     if (!url) return alert('Please enter an article URL!');
     setLoading(true);
     try {
-        const response = await fetch('http://0.0.0.0:3001/analyze', {
+        const response = await fetch(`${API_BASE}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
@@ -79,10 +82,20 @@ function MainPage() {
           responseSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
       } else {
-        alert('Failed to analyze article');
+       let errorMsg = 'Failed to analyze article';
+        try {
+          const errorData = await response.json();
+          if (errorData && errorData.error) {
+            errorMsg = errorData.error;
+          }
+        } catch (e) {
+          errorMsg = await response.text();
+        }
+        setErrorMsg(errorMsg);
       }
     } catch (error) {
       alert('An error occurred while analyzing the article', error.message);
+      setErrorMsg(error.message);
     }
     setLoading(false);
     const audio = new Audio('/assets/success-sound.mp3');
@@ -90,7 +103,7 @@ function MainPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-6 py-12 mt-20 md:mt-0">
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-6 py-12 mt-5 md:mt-0">
       <Metadata />
       <Helmet>
         <title>Bob - AI News Commentary by NewzComp</title>
@@ -106,6 +119,13 @@ function MainPage() {
           </div>
         }
         <div className="w-full max-w-2xl flex flex-col items-center space-y-4">
+          {/* Error message display */}
+          {errorMsg && (
+            <div className="w-full mb-2 text-red-600 bg-red-100 border border-red-300 rounded-lg px-4 py-2 text-center">
+              {errorMsg}
+            </div>
+          )}
+          {/* URL input and analyze button */}
           <input type="text" placeholder="Paste article URL here..." value={url} onChange={handleUrlChange} className="w-full p-4 text-lg rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none bg-white shadow-md" />
 
           <div className="flex items-center space-x-2">
@@ -122,6 +142,7 @@ function MainPage() {
                   setMarkdownContent('');
                   setRelatedArticles([]);
                   setAnalyzed(false);
+                  setErrorMsg('');
                 }}
                 className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white text-lg rounded-xl transition shadow-md"
               >
