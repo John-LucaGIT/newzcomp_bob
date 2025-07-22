@@ -1,5 +1,6 @@
 const nodemailer = require("nodemailer");
 const dotenv = require("dotenv");
+const reportUtils = require('./report_utils');
 dotenv.config();
 
 class Utils {
@@ -36,5 +37,8 @@ class Utils {
 }
 
 const utils = new Utils();
+
+// Attach all reportUtils functions to the utils instance
+Object.assign(utils, reportUtils);
 
 module.exports = { utils };

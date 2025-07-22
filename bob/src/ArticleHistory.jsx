@@ -66,12 +66,35 @@ function ArticleHistory() {
               month: 'long',
               day: 'numeric',
             });
+            const imageUrl = article.image_url || '/assets/tricolorblack.svg';
             return (
-              <Link key={article.bobid} to={`/article/${article.bobid}`} className="bg-white rounded-xl shadow-md p-6 cursor-pointer hover:shadow-lg transition block" style={{ textDecoration: 'none', color: 'inherit' }}>
-                <div className="text-sm text-gray-500 mb-1">{article.source_name}</div>
-                <div className="text-xl font-semibold text-blue-700 mb-2">{article.title}</div>
-                <div className="text-gray-700 mb-2">{formattedDate}</div>
-                <div className="text-xs text-gray-400 truncate">{article.source_url}</div>
+              <Link key={article.bobid} to={`/article/${article.bobid}`} className="bg-white rounded-xl shadow-md overflow-hidden cursor-pointer hover:shadow-lg transition block" style={{ textDecoration: 'none', color: 'inherit' }}>
+                {/* Image Preview */}
+                <div className="h-48 bg-gray-200 flex items-center justify-center">
+                  <img
+                    src={imageUrl}
+                    alt={article.title}
+                    className="max-w-full max-h-full object-contain"
+                    onError={(e) => {
+                      e.target.src = '/assets/tricolorblack.svg';
+                    }}
+                  />
+                </div>
+
+                {/* Content */}
+                <div className="p-6">
+                  {/* Topic Badge */}
+                  {article.topic && (
+                    <div className="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full mb-2">
+                      {article.topic}
+                    </div>
+                  )}
+
+                  <div className="text-sm text-gray-500 mb-1">{article.source_name}</div>
+                  <div className="text-xl font-semibold text-blue-700 mb-2 line-clamp-2">{article.title}</div>
+                  <div className="text-gray-700 mb-2">{formattedDate}</div>
+                  <div className="text-xs text-gray-400 truncate">{article.source_url}</div>
+                </div>
               </Link>
             );
           })}

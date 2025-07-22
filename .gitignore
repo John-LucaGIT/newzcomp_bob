@@ -2,3 +2,6 @@
 *node_modules
 *.DS_Store
 testDB.js
+analysis_results*
+ai_analysis_ou*
+*.log

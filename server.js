@@ -4,7 +4,6 @@ const axios = require('axios');
 const bodyParser = require('body-parser');
 const puppeteer = require('puppeteer');
 const { JSDOM } = require('jsdom');
-const { Readability } = require('@mozilla/readability');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
@@ -12,13 +11,16 @@ const fs = require('fs');
 const https = require('https');
 require('dotenv').config();
 const twilio = require('twilio');
+const { parseAnalysisSection } = require('./decode.js');
 const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
-const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, closePool } = require('./dbconnect');
-const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com'];
+const fetch = require('node-fetch');
+const { getNewsArticles, findAllArticleLinks } = require('./googlenews');
+const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, closePool, loadAllowedDomains } = require('./dbconnect');
+const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','http://192.168.86.52:3001'];
 const app = express();
 const port = process.env.PORT || 3001;
 const { utils } = require('./utils');
-const HOST = '192.168.86.248';
+const HOST = '192.168.86.52';
 const corsOptions = {
   origin: (origin, callback) => {
     if (allowedOrigins.includes(origin)) {
@@ -44,18 +46,10 @@ app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(morgan('combined'));
 
-// OpenAI setup
-const OpenAI = require('openai');
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 // SerpAPI setup
 const SERP_API_KEY = process.env.SERP_API_KEY;
 const SERP_API_ENDPOINT = 'https://serpapi.com/search.json';
-
-// Load allowed domains from JSON file
-const allowedDomains = require('./config.json');
 
 // Create a rate limiter
 const limiter = rateLimit({
@@ -80,7 +74,8 @@ app.post('/analyze', async (req, res) => {
     if (!url || !validator.isURL(url)) {
       return res.status(400).json({ error: 'Invalid URL provided' });
     }
-
+    const allowedDomains = await loadAllowedDomains();
+    console.log('Allowed Domains:', allowedDomains);
     const submittedDomain = new URL(url).hostname.replace(/^www\./, '');
     const isAllowed = allowedDomains.some((domain) => submittedDomain.endsWith(domain));
 
@@ -113,44 +108,73 @@ app.post('/analyze', async (req, res) => {
       return res.status(403).json({ error: `Domain not allowed for analysis: ${submittedDomain}` });
     }
 
-    const keyword = await extractKeywords(url);
-    const relatedArticles = await fetchRelatedArticles(keyword, url);
+    const keyword = await utils.extractKeywords(url);
+    const relatedArticles = await utils.fetchRelatedArticles(keyword, url, allowedDomains);
     console.log('Related Articles:', relatedArticles);
     if (!relatedArticles.length) {
       return res.status(404).json({ error: 'No related articles found' });
     }
-    const scrapedArticles = await scrapeArticles(relatedArticles);
+    const scrapedArticles = await utils.scrapeArticles(relatedArticles);
     console.log('Scraped Articles:', scrapedArticles);
     if (!scrapedArticles.length) {
       return res.status(404).json({ error: 'No articles scraped' });
     }
-    const analysis = await analyzeArticlesWithAI(scrapedArticles);
+    const analysis = await utils.analyzeArticlesWithAINew(scrapedArticles);
+    // Extract article info for metadata
+    const { title, description, imageUrl, author } = await utils.getArticleInfo(url);
+
+    let cleanedAnalysis = analysis;
+    if (typeof analysis === 'string') {
+      cleanedAnalysis = parseAnalysisSection(analysis);
+    }
+    if (!cleanedAnalysis || typeof cleanedAnalysis !== 'object') {
+      cleanedAnalysis = { error: 'Failed to parse analysis' };
+    }
+    // Use analysis fields for DB and response
+    const analysisTitle = cleanedAnalysis.title || title || '';
+    const analysisTopic = cleanedAnalysis.topic || 'all';
+    const analysisSummary = cleanedAnalysis.summary || description || '';
+    const analysisRelated = cleanedAnalysis.related_articles || scrapedArticles.map((article) => ({
+      source: article.source,
+      title: article.title,
+      url: article.url,
+      content: article.text,
+    }));
     res.json({
-      analysis,
-      related_articles: scrapedArticles.map((article) => ({
-        source: article.source,
-        title: article.title,
-        url: article.url,
-        content: article.text,
-      })),
+      analysis: cleanedAnalysis,
+      title: analysisTitle,
+      topic: analysisTopic,
+      summary: analysisSummary,
+      image_url: imageUrl || '',
+      author: author || '',
+      related_articles: analysisRelated,
     });
 
     // Save to DB
-    const title = scrapedArticles[0].title;
     const source_url = url;
     const source_name = scrapedArticles[0].source;
     const analysisData = {
-      analysis,
-      related_articles: scrapedArticles.map((article) => ({
-        source: article.source,
-        title: article.title,
-        url: article.url,
-        content: article.text,
-      })),
+      analysis: cleanedAnalysis,
+      title: analysisTitle,
+      topic: analysisTopic,
+      summary: analysisSummary,
+      image_url: imageUrl || '',
+      author: author || '',
+      related_articles: analysisRelated,
     };
-    console.log('Saving to DB:', { title, analysisData, source_url });
+    console.log('Saving to DB:', { title: analysisTitle, topic: analysisTopic, analysisData, source_url });
     try {
-      await asyncFunction(title, analysisData, source_name, source_url, keyword);
+      await asyncFunction(
+        analysisTitle,
+        analysisData,
+        source_name,
+        source_url,
+        analysisTopic,
+        analysisSummary,
+        imageUrl || '',
+        author || '',
+        analysisRelated
+      );
       console.log('Data saved to DB');
     } catch (err) {
       console.error('Error saving to DB:', err);
@@ -240,66 +264,51 @@ app.post('/feedback', async (req, res) => {
 });
 
 // ===== LATEST BREAKING NEWS ENDPOINT =====
-const fetch = require('node-fetch');
 const { parseStringPromise } = require('xml2js');
 
+// ===== LATEST BREAKING NEWS ENDPOINT (Refactored for theme & Google Search) =====
 app.get('/latest', async (req, res) => {
   try {
-    // Fetch breaking news feed from Google News
-    const feedRes = await fetch('https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en');
-    const xml = await feedRes.text();
+    let theme = req.query.theme;
+    if (!theme) {
+      return res.status(400).json({ error: 'Missing required theme parameter' });
+    }
+    theme = theme.toLowerCase(); // Ensure theme is lowercase
+    // Query the DB for articles with this theme (topic)
+    const conn = await require('mariadb').createConnection({
+      host: process.env.DB_HOST,
+      user: process.env.DB_USER,
+      port: process.env.DB_PORT,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME
+    });
 
-    // Parse the RSS feed
-    const parsed = await parseStringPromise(xml);
-    const items = parsed.rss.channel[0].item;
-
-    if (!items || items.length === 0) {
-      return res.status(404).json({ error: 'No articles found in feed' });
+    let articles;
+    if (theme === 'all') {
+      // Return all articles regardless of theme
+      articles = await conn.query(
+        'SELECT * FROM daily_news_articles ORDER BY news_date DESC, id DESC'
+      );
+    } else {
+      // Return articles for specific theme
+      articles = await conn.query(
+        'SELECT * FROM daily_news_articles WHERE LOWER(theme) = ? ORDER BY news_date DESC, id DESC',
+        [theme]
+      );
     }
 
-    // Take the first 3 article URLs
-    const topArticles = items.slice(0, 3).map((item) => ({
-      title: item.title[0],
-      url: item.link[0],
-    }));
-
-    // console.log('Top 3 breaking news articles:', topArticles);
-
-    // Scrape the full content of those articles
-    const scrapedArticles = await scrapeArticles(
-      topArticles.map((a) => ({
-        source: { name: new URL(a.url).hostname.replace('www.', '') },
-        title: a.title,
-        url: a.url,
-        publishedAt: new Date().toISOString(),
-        content: '', // will be scraped
-      }))
-    );
-
-    if (!scrapedArticles.length) {
-      return res.status(404).json({ error: 'No articles could be scraped' });
+    await conn.end();
+    if (!articles.length) {
+      return res.status(404).json({ error: `No articles found for theme: ${theme}` });
     }
-
-    // Analyze using your AI
-    const analysis = await analyzeArticlesWithAI(scrapedArticles);
-
-    // Return the analysis + scraped articles
     return res.json({
-      analysis,
-      related_articles: scrapedArticles.map((article) => ({
-        source: article.source,
-        title: article.title,
-        url: article.url,
-        content: article.text,
-      })),
+      articles
     });
   } catch (error) {
     console.error('Error in /latest endpoint:', error.message);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-// ===== Get All Article Metadata =====
 
 // Endpoint to get metadata for all articles
 app.get('/articles', async (req, res) => {
@@ -327,218 +336,55 @@ app.get('/articles/:id', async (req, res) => {
     if (typeof article.bobid === 'bigint') {
       article.bobid = article.bobid.toString();
     }
-    res.json(article);
+    // Parse analysis JSON
+    let parsedAnalysis = {};
+    try {
+      parsedAnalysis = typeof article.analysis === 'string' ? JSON.parse(article.analysis) : article.analysis;
+      // Handle nested analysis if it exists
+      if (parsedAnalysis.analysis && typeof parsedAnalysis.analysis === 'object') {
+        parsedAnalysis = parsedAnalysis.analysis;
+      }
+    } catch (e) {
+      parsedAnalysis = {};
+    }
+
+    // Parse related_articles if it's a string
+    let relatedArticles = [];
+    try {
+      if (article.related_articles) {
+        relatedArticles = typeof article.related_articles === 'string' ? JSON.parse(article.related_articles) : article.related_articles;
+      }
+    } catch (e) {
+      relatedArticles = [];
+    }
+
+    res.json({
+      bobid: article.bobid,
+      title: article.title || '',
+      topic: article.topic || '',
+      author: article.author || '',
+      image_url: article.image_url || '',
+      related_articles: relatedArticles,
+      query_date: article.query_date,
+      source_name: article.source_name || '',
+      source_url: article.source_url || '',
+      keyword: article.keyword || '',
+      analysis: {
+        summary: parsedAnalysis.summary || '',
+        bias: parsedAnalysis.bias || [],
+        bias_rating: parsedAnalysis.bias_rating || '',
+        bias_direction: parsedAnalysis.bias_direction || '',
+        sources_agree_on: parsedAnalysis.sources_agree_on || '',
+        conclusion: parsedAnalysis.conclusion || '',
+        recommendations: parsedAnalysis.recommendations || '',
+        reasoning: parsedAnalysis.reasoning || ''
+      }
+    });
   } catch (error) {
     console.error(`Error fetching article with ID ${id}:`, error.message);
     res.status(500).json({ error: 'Failed to fetch article' });
   }
 });
-
-// ===== Helper Functions =====
-
-// 1. Extract article title and description
-async function getArticleInfo(url) {
-  try {
-    const response = await axios.get(url);
-    const dom = new JSDOM(response.data);
-    const document = dom.window.document;
-
-    const title = document.querySelector('meta[property="og:title"]')?.content || document.querySelector('title')?.textContent || '';
-
-    const description = document.querySelector('meta[property="og:description"]')?.content || document.querySelector('meta[name="description"]')?.content || '';
-
-    return { title: title.trim(), description: description.trim() };
-  } catch (error) {
-    console.error('Error extracting article info:', error.message);
-    return { title: '', description: '' };
-  }
-}
-
-// 2. Generate search query using OpenAI
-async function generateSearchQueryFromArticle({ title, description }) {
-  const prompt = `
-    You are a news search expert.
-
-    Given the following article title and description, create a string of KEYWORDS that captures the **topic** of the article.
-    Use operators like quotes ("") for phrases, AND, OR, NOT if needed.
-    Keep it under 500 characters.
-
-    TITLE: "${title}"
-    DESCRIPTION: "${description}"
-
-    Return only the search query, nothing else.
-  `;
-
-  const gptResponse = await openai.chat.completions.create({
-    model: 'gpt-4.1-mini',
-    messages: [{ role: 'user', content: prompt }],
-  });
-  // console.log('GPT Response:', gptResponse);
-
-  const searchQuery = gptResponse.choices[0].message.content.trim();
-  // console.log('Generated Search Query:', searchQuery);
-  return searchQuery;
-}
-
-// 3. Keyword extraction
-async function extractKeywords(url) {
-  const articleInfo = await getArticleInfo(url);
-  if (!articleInfo.title) {
-    console.warn("No title found, fallback to 'latest news'");
-    return 'latest news';
-  }
-  const searchQuery = await generateSearchQueryFromArticle(articleInfo);
-  return searchQuery || articleInfo.title;
-}
-
-// 4. Fetch related articles (using SerpAPI instead of NewsAPI)
-async function fetchRelatedArticles(keyword, sourceUrl) {
-  try {
-    const response = await axios.get(SERP_API_ENDPOINT, {
-      params: {
-        q: keyword,
-        tbm: 'nws', // Target Google News
-        api_key: SERP_API_KEY,
-        num: 10,
-      },
-    });
-
-    const serpArticles = response.data.news_results || [];
-
-    // Only include articles whose domain is in the allowedDomains whitelist
-    const articles = serpArticles
-      .filter((article) => {
-        try {
-          const domain = new URL(article.link).hostname.replace(/^www\./, '');
-          return allowedDomains.some((allowed) => domain.endsWith(allowed));
-        } catch {
-          return false;
-        }
-      })
-      .map((article) => ({
-        source: { name: article.source },
-        title: article.title,
-        url: article.link,
-        publishedAt: article.date || new Date().toISOString(),
-        content: article.snippet || '',
-      }));
-
-    // Add the original source article if not included and if it's in the whitelist
-    const sourceDomain = new URL(sourceUrl).hostname.replace(/^www\./, '');
-    const isSourceAllowed = allowedDomains.some((allowed) => sourceDomain.endsWith(allowed));
-    const found = articles.some((a) => normalizeUrl(a.url) === normalizeUrl(sourceUrl));
-
-    if (!found && isSourceAllowed) {
-      const { title, description } = await getArticleInfo(sourceUrl);
-      articles.unshift({
-        source: { name: sourceDomain },
-        title: title || 'Source Article',
-        url: sourceUrl,
-        publishedAt: new Date().toISOString(),
-        content: description || '', // We'll scrape this manually later if needed
-      });
-    }
-
-    return articles;
-  } catch (error) {
-    console.error('Error fetching related articles (SerpAPI):', error.message);
-    return [];
-  }
-}
-
-// 5. Normalize URL (remove query params etc.)
-function normalizeUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.origin + u.pathname;
-  } catch (e) {
-    return url;
-  }
-}
-
-// 6. Scrape articles (basic for MVP)
-async function scrapeArticles(relatedArticles) {
-  const max = 4;
-  const out = [];
-
-  for (let art of relatedArticles.slice(0, max)) {
-    const fullText = await fetchFullArticleText(art.url);
-    out.push({
-      source: art.source.name,
-      title: art.title,
-      url: art.url,
-      date: art.publishedAt,
-      text: fullText || '',
-    });
-  }
-
-  return out;
-}
-
-async function fetchFullArticleText(url) {
-  try {
-    const { data: html } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
-
-    const dom = new JSDOM(html, { url, contentType: 'text/html' });
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
-
-    const first200Words = article?.textContent?.split(/\s+/).slice(0, 200).join(' ');
-    return first200Words || null;
-  } catch (err) {
-    console.error(`Error fetching article content from ${url}:`, err.message);
-    return null;
-  }
-}
-
-// 7. Analyze articles with OpenAI
-async function analyzeArticlesWithAI(articles) {
-  const payload = articles.map((a) => ({
-    source: a.source,
-    title: a.title,
-    text: a.text.slice(0, 40_000),
-  }));
-
-  const prompt = `
-  Your name is Bob, you are a professional news analyst trained to detect Bias.
-
-  **Bob's Summary:**
-  (((Summary of the story)))
-
-  **Bob's Bias Analysis:** (Do this for each source)
-  - Source: [source name]
-  - Title: [title]
-  - Bias Rating: [0-5] and Bias Direction: [left/right/neutral]
-  - Bias Analysis: [analysis]
-
-  **What the sources agree on:**
-  (((Facts all sources agree on)))
-
-  **Bob's Conclusion:**
-  (((Conclusion based on the analysis, provide an in-depth conclusion of your analysis, explain your reasoning and how you arrived at your conclusion as well as the reasoning for your ratings.)))
-  **Bob's Recommendations:**
-  (((Recommendations for the reader)))
-
-  Here are the articles:
-
-  ${JSON.stringify(payload, null, 2)}
-
-  Return a structured report in Markdown.
-`;
-  console.log('Payload for OpenAI:', payload);
-
-  const resp = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  if (!resp.choices?.length) {
-    throw new Error('OpenAI returned no choices');
-  }
-  return resp.choices[0].message.content.trim();
-}
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -553,7 +399,7 @@ process.on('SIGINT', async () => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, HOST, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running at http://${HOST}:${PORT}`);
 });
 
