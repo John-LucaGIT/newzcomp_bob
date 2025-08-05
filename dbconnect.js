@@ -84,6 +84,21 @@ async function getHistoricArticleById(bobid) {
   }
 }
 
+async function getLatestArticleById(bobid) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    console.log("Fetching article with ID:", bobid);
+    const res = await conn.query("SELECT id, topic, theme, news_date, url, title, summary,  analysis, related_articles, keywords, image_url, author, source, created_at, batchid FROM daily_news_articles WHERE id = ?", [bobid]);
+    return res[0];
+  } catch (err) {
+    console.error("Error fetching historic article by ID:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
 async function insertDailyNewsArticles(articles, batchid = null) {
   let conn;
   if (!batchid) {
@@ -123,6 +138,34 @@ async function insertDailyNewsArticles(articles, batchid = null) {
   }
 }
 
+async function getLatestArticlesByTheme(theme) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    let articles;
+
+    if (theme === 'all') {
+      // Return all articles regardless of theme
+      articles = await conn.query(
+        'SELECT * FROM daily_news_articles ORDER BY news_date DESC, id DESC'
+      );
+    } else {
+      // Return articles for specific theme
+      articles = await conn.query(
+        'SELECT * FROM daily_news_articles WHERE LOWER(theme) = ? ORDER BY news_date DESC, id DESC',
+        [theme.toLowerCase()]
+      );
+    }
+
+    return articles;
+  } catch (err) {
+    console.error("Error getting latest articles by theme:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
 function closePool() {
   return pool.end().then(() => {
     console.log("Connection pool closed.");
@@ -131,4 +174,4 @@ function closePool() {
   });
 }
 
-module.exports = { asyncFunction, closePool, getHistoricArticleMetadata, getHistoricArticleById, loadAllowedDomains, insertDailyNewsArticles };
+module.exports = { asyncFunction, closePool, getHistoricArticleMetadata, getHistoricArticleById, getLatestArticleById, loadAllowedDomains, insertDailyNewsArticles, getLatestArticlesByTheme };

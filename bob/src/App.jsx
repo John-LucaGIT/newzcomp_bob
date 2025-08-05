@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import MainPage from './MainPage';
 import ArticleHistory from './ArticleHistory';
 import FeedbackPage from './FeedbackPage';
+import LatestNews from './LatestNews';
 import ArticlePage from './components/ArticlePage';
 import { Helmet } from 'react-helmet';
 
@@ -53,6 +54,9 @@ function App() {
                 <a href="./" className="block md:hidden px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
                   Home
                 </a>
+                <Link to="/latest" className="block px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
+                  Latest News
+                </Link>
                 <Link to="/stored-articles" className="block px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
                   History
                 </Link>
@@ -80,6 +84,7 @@ function App() {
           <div className="pt-0">
             <Routes>
               <Route path="/" element={<MainPage />} />
+              <Route path="/latest" element={<LatestNews />} />
               <Route path="/stored-articles" element={<ArticleHistory />} />
               <Route path="/feedback" element={<FeedbackPage />} />
               <Route path="/article/:bobid" element={<ArticlePage />} />

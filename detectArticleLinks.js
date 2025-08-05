@@ -1,9 +1,81 @@
 // detectArticleLinks.js
-const { getNewsArticles, findAllArticleLinks } = require('./googlenews');
+const { getNewsArticles, findAllArticleLinks, buildSearchParameters, searchNews } = require('./googlenews');
 const { loadAllowedDomains, insertDailyNewsArticles, closePool } = require('./dbconnect');
 const { parseAnalysisSection } = require('./decode.js');
 const utils = require('./report_utils');
 const fs = require('fs');
+const path = require('path');
+
+// Enhanced Logging System
+class Logger {
+  constructor(logDir = './logs') {
+    this.logDir = logDir;
+    this.ensureLogDir();
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    this.logFile = path.join(logDir, `detect-articles-${timestamp}.log`);
+    this.errorFile = path.join(logDir, `detect-articles-errors-${timestamp}.log`);
+
+    this.log('INFO', 'Logger initialized', { logFile: this.logFile, errorFile: this.errorFile });
+  }
+
+  ensureLogDir() {
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir, { recursive: true });
+    }
+  }
+
+  formatMessage(level, message, data = {}) {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      level,
+      message,
+      ...data
+    };
+    return JSON.stringify(logEntry) + '\n';
+  }
+
+  writeToFile(filename, content) {
+    try {
+      fs.appendFileSync(filename, content);
+    } catch (err) {
+      console.error('Failed to write to log file:', err.message);
+    }
+  }
+
+  log(level, message, data = {}) {
+    const formattedMessage = this.formatMessage(level, message, data);
+
+    // Write to console with color coding
+    const colors = {
+      INFO: '\x1b[36m',    // Cyan
+      WARN: '\x1b[33m',    // Yellow
+      ERROR: '\x1b[31m',   // Red
+      SUCCESS: '\x1b[32m', // Green
+      DEBUG: '\x1b[35m'    // Magenta
+    };
+    const resetColor = '\x1b[0m';
+    console.log(`${colors[level] || ''}[${level}] ${message}${resetColor}`, data);
+
+    // Write to log file
+    this.writeToFile(this.logFile, formattedMessage);
+
+    // Write errors to separate error file
+    if (level === 'ERROR') {
+      this.writeToFile(this.errorFile, formattedMessage);
+    }
+  }
+
+  info(message, data = {}) { this.log('INFO', message, data); }
+  warn(message, data = {}) { this.log('WARN', message, data); }
+  error(message, data = {}) { this.log('ERROR', message, data); }
+  success(message, data = {}) { this.log('SUCCESS', message, data); }
+  debug(message, data = {}) { this.log('DEBUG', message, data); }
+}
+
+// Initialize logger
+const logger = new Logger();
 
 /**
  * Analyze one article from each source.
@@ -24,28 +96,68 @@ async function analyzeArticlesFromLinks(articleLinks, options = {}) {
         continue;
       }
       // Extract keywords and fetch related articles
+      logger.info('Starting article processing', { url });
       const keyword = await utils.extractKeywords(url);
-      const relatedArticles = await utils.fetchRelatedArticles(keyword, url, allowedDomains);
+      logger.info('Extracted keywords', { url, keyword });
+
+      const concepts = await utils.extractArticleConceptsFromUrl(url);
+      logger.info('Extracted Concepts', { url, concepts });
+
+      const params = buildSearchParameters(concepts, url);
+      logger.info('Built search parameters', { url, params });
+
+      const google_related_articles = await searchNews(params);
+      logger.info('Google Related Articles', { url, count: google_related_articles?.length || 0 });
+
+      if (!google_related_articles || google_related_articles.length === 0) {
+        logger.warn('No related articles found in Google News', { url });
+        results.push({ url, error: 'No related articles found in Google News' });
+        continue;
+      }
+
+      // const relatedArticles = await utils.fetchRelatedArticles(keyword, url, allowedDomains);
+      const relatedArticles = await utils.cleanGoogleArticles(google_related_articles, allowedDomains);
+      logger.info('Cleaned Google Related Articles', { url, count: relatedArticles?.length || 0 });
+
       if (!relatedArticles.length) {
+        logger.warn('No related articles found after cleaning', { url });
         results.push({ url, error: 'No related articles found' });
         continue;
       }
       // Scrape articles
+      logger.info('Starting article scraping', { url, articlesToScrape: relatedArticles.length });
       const scrapedArticles = await utils.scrapeArticles(relatedArticles);
+      logger.info('Scraped articles completed', { url, scrapedCount: scrapedArticles.length });
+
       if (!scrapedArticles.length) {
+        logger.warn('No articles scraped', { url });
         results.push({ url, error: 'No articles scraped' });
         continue;
       }
+
       // Get article info for imageUrl
+      logger.info('Getting article info', { url });
       const { title, description, imageUrl, author } = await utils.getArticleInfo(url);
+      logger.info('Got article info', { url, title: title?.substring(0, 50) });
+
       // You may want to extract author/source if available from getArticleInfo or another method
+      logger.info('Starting AI analysis', { url, scrapedArticlesCount: scrapedArticles.length });
       const analysisRaw = await utils.analyzeArticlesWithAINew(scrapedArticles);
+      logger.info('AI analysis completed', { url, analysisLength: analysisRaw?.length || 0 });
       let analysis = analysisRaw;
       if (typeof analysisRaw === 'string') {
+        logger.info('Parsing analysis from string', { url });
         // Try to parse if it's a JSON string or markdown-wrapped JSON
-        analysis = parseAnalysisSection ? parseAnalysisSection(analysisRaw) : JSON.parse(analysisRaw);
+        try {
+          analysis = parseAnalysisSection ? parseAnalysisSection(analysisRaw) : JSON.parse(analysisRaw);
+          logger.info('Successfully parsed analysis', { url, analysisKeys: Object.keys(analysis || {}) });
+        } catch (parseError) {
+          logger.error('Failed to parse analysis', { url, error: parseError.message, rawLength: analysisRaw?.length });
+          analysis = { error: 'Failed to parse analysis', raw: analysisRaw };
+        }
       }
-      results.push({
+
+      const resultData = {
         analysis: {
           bias: analysis.bias || [],
           bias_rating: analysis.bias_rating || 'unknown',
@@ -70,13 +182,47 @@ async function analyzeArticlesFromLinks(articleLinks, options = {}) {
           url: article.url,
           content: article.text,
         })),
+      };
+
+      logger.info('Result data created', {
+        url,
+        hasTitle: !!resultData.title,
+        hasSummary: !!resultData.summary,
+        hasAnalysis: !!resultData.analysis.summary,
+        relatedCount: resultData.related_articles.length
       });
+
+      // Validate critical fields before adding to results
+      const validationIssues = [];
+      if (!resultData.title || resultData.title.length < 5) {
+        validationIssues.push('title missing or too short');
+      }
+      if (!resultData.analysis.summary || resultData.analysis.summary.length < 20) {
+        validationIssues.push('analysis summary missing or too short');
+      }
+      if (!resultData.analysis.bias || resultData.analysis.bias.length === 0) {
+        validationIssues.push('bias analysis missing');
+      }
+      if (!resultData.related_articles || resultData.related_articles.length === 0) {
+        validationIssues.push('no related articles');
+      }
+
+      if (validationIssues.length > 0) {
+        logger.warn('Article has validation issues but will be included in results', {
+          url,
+          issues: validationIssues
+        });
+      } else {
+        logger.success('Article passed validation checks', { url });
+      }
+
+      results.push(resultData);
     } catch (err) {
       results.push({ url, error: err.message });
+      logger.error('Error processing article', { url, error: err.message });
     }
   }
-  console.log('Analysis results:');
-  console.log(results);
+  logger.info('Analysis results', { results });
   return results;
 }
 
@@ -151,22 +297,83 @@ const themes = [
 (async () => {
   for (const topic of themes) {
     const isBreaking = topic.toLowerCase() === 'breaking';
-    console.log(`Analyzing topic: ${topic}`);
+    logger.info(`Analyzing topic: ${topic}`);
     const results = await getAnalysisForTopic(topic, { isBreaking });
-    const outputPath = `./analysis_results_${topic}.json`;
+    const outputPath = `./analysis/analysis_results_${topic}.json`;
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), 'utf8');
-    console.log(`Analysis results written to ${outputPath}`);
+    logger.success(`Analysis results written to ${outputPath}`);
 
-    // Prepare articles for DB insert
+    // Prepare articles for DB insert with validation
     const allowedDomainsForInsert = await loadAllowedDomains();
     const news_date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const theme = topic;
+
+    /**
+     * Validates if an article has sufficient content for database insertion
+     */
+    function isValidArticle(article) {
+      // Check for required fields
+      if (!article.url || !article.title) {
+        logger.warn('Article missing URL or title', { url: article.url, title: article.title });
+        return false;
+      }
+
+      // Check if title is meaningful (not just "No title" or similar)
+      if (article.title.toLowerCase().includes('no title') || article.title.length < 10) {
+        logger.warn('Article has invalid or too short title', { title: article.title });
+        return false;
+      }
+
+      // Check if analysis exists and has meaningful content
+      if (!article.analysis || typeof article.analysis !== 'object') {
+        logger.warn('Article missing analysis object', { url: article.url });
+        return false;
+      }
+
+      // Check if analysis has summary (most critical field)
+      if (!article.analysis.summary || article.analysis.summary.length < 20) {
+        logger.warn('Article missing or too short analysis summary', {
+          url: article.url,
+          summaryLength: article.analysis.summary?.length || 0
+        });
+        return false;
+      }
+
+      // Check if bias analysis exists
+      if (!article.analysis.bias || !Array.isArray(article.analysis.bias) || article.analysis.bias.length === 0) {
+        logger.warn('Article missing bias analysis', { url: article.url });
+        return false;
+      }
+
+      // Check if we have related articles (should have at least 1)
+      if (!article.related_articles || !Array.isArray(article.related_articles) || article.related_articles.length === 0) {
+        logger.warn('Article missing related articles', { url: article.url });
+        return false;
+      }
+
+      logger.info('Article passed validation', { url: article.url, title: article.title.substring(0, 50) });
+      return true;
+    }
+
     const articlesForDb = results
       .filter((article) => {
         try {
+          // First check domain allowlist
           const domain = new URL(article.url).hostname.replace(/^www\./, '');
-          return allowedDomainsForInsert.some((allowed) => domain.endsWith(allowed));
-        } catch {
+          const isDomainAllowed = allowedDomainsForInsert.some((allowed) => domain.endsWith(allowed));
+          if (!isDomainAllowed) {
+            logger.warn('Article domain not in allowlist', { domain, url: article.url });
+            return false;
+          }
+
+          // Then validate article content
+          const isValid = isValidArticle(article);
+          if (!isValid) {
+            logger.warn('Article failed validation, excluding from DB insert', { url: article.url });
+          }
+          return isValid;
+        } catch (error) {
+          logger.error('Error validating article', { url: article.url, error: error.message });
           return false;
         }
       })
@@ -196,8 +403,15 @@ const themes = [
           source: article.source || '',
         };
       });
-    const batchid = await insertDailyNewsArticles(articlesForDb);
-    console.log(`Inserted ${articlesForDb.length} articles into DB with batchid: ${batchid}`);
+
+    logger.info(`Validation results: ${results.length} total articles, ${articlesForDb.length} valid for DB insertion`);
+
+    if (articlesForDb.length === 0) {
+      logger.warn(`No valid articles found for topic ${topic} - skipping database insertion`);
+    } else {
+      const batchid = await insertDailyNewsArticles(articlesForDb);
+      logger.success(`Inserted ${articlesForDb.length} valid articles into DB with batchid: ${batchid}`);
+    }
   }
   await closePool();
 })();

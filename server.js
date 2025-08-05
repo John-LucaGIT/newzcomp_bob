@@ -1,26 +1,18 @@
 // server.js
 const express = require('express');
-const axios = require('axios');
 const bodyParser = require('body-parser');
-const puppeteer = require('puppeteer');
-const { JSDOM } = require('jsdom');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const fs = require('fs');
 const https = require('https');
 require('dotenv').config();
-const twilio = require('twilio');
 const { parseAnalysisSection } = require('./decode.js');
-const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
-const fetch = require('node-fetch');
-const { getNewsArticles, findAllArticleLinks } = require('./googlenews');
-const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, closePool, loadAllowedDomains } = require('./dbconnect');
+const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, getLatestArticleById, closePool, loadAllowedDomains, getLatestArticlesByTheme } = require('./dbconnect');
 const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','http://192.168.86.52:3001'];
 const app = express();
 const port = process.env.PORT || 3001;
 const { utils } = require('./utils');
-const HOST = '192.168.86.52';
 const corsOptions = {
   origin: (origin, callback) => {
     if (allowedOrigins.includes(origin)) {
@@ -34,22 +26,38 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-// For HTTPS setup, uncomment the following lines and provide your certificate files
-// const options = {
-//   key: fs.readFileSync(''), // Certbot private key
-//   cert: fs.readFileSync(''), // Certbot certificate
-//   ca: fs.readFileSync(''), // Optional: if you have a chain file (some setups may include this)
-// };
+// SSL options with fallback for development
+let serverOptions = null;
+try {
+  // Try multiple SSL certificate paths
+  const sslPaths = [
+    { key: '/home/cyberfx/ssl/privkey.pem', cert: '/home/cyberfx/ssl/fullchain.pem' },
+    { key: '/etc/letsencrypt/live/newzcomp.com/privkey.pem', cert: '/etc/letsencrypt/live/newzcomp.com/fullchain.pem' },
+    { key: '/etc/letsencrypt/live/bob.newzcomp.com/privkey.pem', cert: '/etc/letsencrypt/live/bob.newzcomp.com/fullchain.pem' }
+  ];
+
+  for (const paths of sslPaths) {
+    if (fs.existsSync(paths.key) && fs.existsSync(paths.cert)) {
+      serverOptions = {
+        key: fs.readFileSync(paths.key),
+        cert: fs.readFileSync(paths.cert),
+      };
+      console.log(`SSL certificates loaded successfully from ${paths.key}`);
+      break;
+    }
+  }
+
+  if (!serverOptions) {
+    console.warn('SSL certificates not found in any location, will run in HTTP mode');
+  }
+} catch (error) {
+  console.warn('SSL certificates could not be loaded, running in HTTP mode:', error.message);
+}
 
 app.use(cors(corsOptions));
 
 app.use(bodyParser.json());
 app.use(morgan('combined'));
-
-
-// SerpAPI setup
-const SERP_API_KEY = process.env.SERP_API_KEY;
-const SERP_API_ENDPOINT = 'https://serpapi.com/search.json';
 
 // Create a rate limiter
 const limiter = rateLimit({
@@ -75,7 +83,6 @@ app.post('/analyze', async (req, res) => {
       return res.status(400).json({ error: 'Invalid URL provided' });
     }
     const allowedDomains = await loadAllowedDomains();
-    console.log('Allowed Domains:', allowedDomains);
     const submittedDomain = new URL(url).hostname.replace(/^www\./, '');
     const isAllowed = allowedDomains.some((domain) => submittedDomain.endsWith(domain));
 
@@ -93,7 +100,7 @@ app.post('/analyze', async (req, res) => {
       ❌ Requested URL: ${url}
       `.trim();
 
-      htmlText = `
+      const htmlText = `
         <h1>NewzComp - Unsupported Domain Attempt</h1>
         <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
         <p><strong>IP:</strong> ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}</p>
@@ -133,22 +140,12 @@ app.post('/analyze', async (req, res) => {
     // Use analysis fields for DB and response
     const analysisTitle = cleanedAnalysis.title || title || '';
     const analysisTopic = cleanedAnalysis.topic || 'all';
-    const analysisSummary = cleanedAnalysis.summary || description || '';
-    const analysisRelated = cleanedAnalysis.related_articles || scrapedArticles.map((article) => ({
-      source: article.source,
-      title: article.title,
-      url: article.url,
-      content: article.text,
+    const analysisSummary = cleanedAnalysis.summary || description || '';    const analysisRelated = cleanedAnalysis.related_articles || scrapedArticles.map((article) => ({
+        source: article.source,
+        title: article.title,
+        url: article.url,
+        content: article.text,
     }));
-    res.json({
-      analysis: cleanedAnalysis,
-      title: analysisTitle,
-      topic: analysisTopic,
-      summary: analysisSummary,
-      image_url: imageUrl || '',
-      author: author || '',
-      related_articles: analysisRelated,
-    });
 
     // Save to DB
     const source_url = url;
@@ -180,45 +177,57 @@ app.post('/analyze', async (req, res) => {
       console.error('Error saving to DB:', err);
     }
 
-    // After sending response to client
-    const cleanedBody = JSON.stringify(req.body, null, 2).slice(0, 400); // Limit to avoid huge SMS
+    // Send email notification and response
+    try {
+      const cleanedBody = JSON.stringify(req.body, null, 2).slice(0, 400);
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
 
-    const userAgent = req.headers['user-agent'] || 'Unknown';
-    const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+      const messageBody = `
+      📰 NewzComp Analysis Request | BOB
 
-    const responseTime = res.getHeader('X-Response-Time') || 'Unknown';
-    const responseStatus = res.statusCode;
+        🔍 /analyze endpoint used
+        🕒 ${new Date().toLocaleString()}
+        🌐 IP: ${requestIP}
+        📱 UA: ${userAgent}
+        📦 Payload: ${cleanedBody}
 
-    const messageBody = `
-    📰 NewzComp Analysis Request | BOB
+        🔑 Generated Search Query: ${keyword}
 
-      🔍 /analyze endpoint used
-      🕒 ${new Date().toLocaleString()}
-      🌐 IP: ${requestIP}
-      📱 UA: ${userAgent}
-      📦 Payload: ${cleanedBody}
-      ✅ Response Status: ${responseStatus}
-      ⏱️ Response Time: ${responseTime}
+        📊 Bob's Analysis: ${analysis}
+      `.trim();
 
-      🔑 Generated Search Query: ${keyword}
+      const htmlText = `
+        <h1>NewzComp Analysis Request</h1>
+        <p><strong>Endpoint:</strong> /analyze</p>
+        <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>IP:</strong> ${requestIP}</p>
+        <p><strong>User Agent:</strong> ${userAgent}</p>
+        <p><strong>Payload:</strong> ${cleanedBody}</p>
+        <p><strong>Generated Search Query:</strong> ${keyword}</p>
+        <p><strong>Bob's Analysis:</strong> ${analysis}</p>
+      `;
 
-      📊 Bob's Analysis: ${analysis}
-    `.trim();
+      // Send email notification (non-blocking, with error handling)
+      utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob API Notification ✔', messageBody, htmlText)
+        .catch(emailError => {
+          console.error('Email notification failed:', emailError.message);
+        });
 
-    htmlText = `
-      <h1>NewzComp Analysis Request</h1>
-      <p><strong>Endpoint:</strong> /analyze</p>
-      <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
-      <p><strong>IP:</strong> ${requestIP}</p>
-      <p><strong>User Agent:</strong> ${userAgent}</p>
-      <p><strong>Payload:</strong> ${cleanedBody}</p>
-      <p><strong>Response Status:</strong> ${responseStatus}</p>
-      <p><strong>Response Time:</strong> ${responseTime}</p>
-      <p><strong>Generated Search Query:</strong> ${keyword}</p>
-      <p><strong>Bob's Analysis:</strong> ${analysis}</p>
-    `;
+    } catch (notificationError) {
+      console.error('Notification setup failed:', notificationError.message);
+    }
 
-    await utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob API Notification ✔', messageBody, htmlText);
+    // Send successful response to client
+    res.json({
+      analysis: cleanedAnalysis,
+      title: analysisTitle,
+      topic: analysisTopic,
+      summary: analysisSummary,
+      image_url: imageUrl || '',
+      author: author || '',
+      related_articles: analysisRelated,
+    });
   } catch (error) {
     console.error('Error in /analyze endpoint:', error.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -386,6 +395,66 @@ app.get('/articles/:id', async (req, res) => {
   }
 });
 
+app.get('/latest/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const article = await getLatestArticleById(id); // Fetch specific article by ID from the database
+    if (!article) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+    if (typeof article.bobid === 'bigint') {
+      article.bobid = article.bobid.toString();
+    }
+    // Parse analysis JSON
+    let parsedAnalysis = {};
+    try {
+      parsedAnalysis = typeof article.analysis === 'string' ? JSON.parse(article.analysis) : article.analysis;
+      // Handle nested analysis if it exists
+      if (parsedAnalysis.analysis && typeof parsedAnalysis.analysis === 'object') {
+        parsedAnalysis = parsedAnalysis.analysis;
+      }
+    } catch (e) {
+      parsedAnalysis = {};
+    }
+
+    // Parse related_articles if it's a string
+    let relatedArticles = [];
+    try {
+      if (article.related_articles) {
+        relatedArticles = typeof article.related_articles === 'string' ? JSON.parse(article.related_articles) : article.related_articles;
+      }
+    } catch (e) {
+      relatedArticles = [];
+    }
+
+    res.json({
+      bobid: article.id,
+      title: article.title || '',
+      topic: article.topic || '',
+      author: article.author || '',
+      image_url: article.image_url || '',
+      related_articles: relatedArticles,
+      query_date: article.query_date,
+      source_name: article.source_name || '',
+      source_url: article.source_url || '',
+      keyword: article.keyword || '',
+      analysis: {
+        summary: parsedAnalysis.summary || '',
+        bias: parsedAnalysis.bias || [],
+        bias_rating: parsedAnalysis.bias_rating || '',
+        bias_direction: parsedAnalysis.bias_direction || '',
+        sources_agree_on: parsedAnalysis.sources_agree_on || '',
+        conclusion: parsedAnalysis.conclusion || '',
+        recommendations: parsedAnalysis.recommendations || '',
+        reasoning: parsedAnalysis.reasoning || ''
+      }
+    });
+  } catch (error) {
+    console.error(`Error fetching article with ID ${id}:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch article' });
+  }
+});
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down server...');
@@ -398,22 +467,14 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
-});
-
-// For HTTPS setup, uncomment the following lines and provide your certificate files
-
-// // Start the HTTPS server
-// https.createServer(options, app).listen(port, () => {
-//   console.log(`HTTPS server is running on https://localhost:${port}`);
-// });
-
-// // Redirect HTTP traffic to HTTPS
-// http.createServer((req, res) => {
-//   res.writeHead(301, { "Location": `https://${req.headers['host']}${req.url}` });
-//   res.end();
-// }).listen(80, () => {
-//   console.log('HTTP server is running on http://localhost:80 (redirecting to HTTPS)');
-// });
+// Start server with HTTPS/HTTP fallback
+if (serverOptions) {
+  https.createServer(serverOptions, app).listen(port, () => {
+    console.log(`HTTPS server is running on https://bob.newzcomp.com:${port}`);
+  });
+} else {
+  app.listen(port, () => {
+    console.log(`HTTP server is running on http://localhost:${port}`);
+    console.log('Note: Running in HTTP mode - SSL certificates not available');
+  });
+}

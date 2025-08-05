@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Helmet } from 'react-helmet';
 
@@ -45,20 +45,30 @@ function getBiasRatingColor(rating) {
 function ArticlePage() {
   const { bobid } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [article, setArticle] = useState(null);
   const [loading, setLoading] = useState(true);
   const API_BASE = import.meta.env.VITE_API_BASE;
+
+  // Check if coming from latest news page
+  const source = searchParams.get('source');
+  const isFromLatest = source === 'latest';
 
   console.log('ArticlePage: Component mounted');
   console.log('ArticlePage: bobid =', bobid);
   console.log('ArticlePage: API_BASE =', API_BASE);
 
   useEffect(() => {
+    // Determine which endpoint to use based on source
+    const endpoint = isFromLatest ? `/latest/${bobid}` : `/articles/${bobid}`;
+    const fullUrl = `${API_BASE}${endpoint}`;
+
     console.log('ArticlePage: bobid =', bobid);
     console.log('ArticlePage: API_BASE =', API_BASE);
-    console.log('ArticlePage: Full URL =', `${API_BASE}/articles/${bobid}`);
+    console.log('ArticlePage: isFromLatest =', isFromLatest);
+    console.log('ArticlePage: Full URL =', fullUrl);
 
-    fetch(`${API_BASE}/articles/${bobid}`)
+    fetch(fullUrl)
       .then((res) => {
         console.log('ArticlePage: Response status:', res.status);
         console.log('ArticlePage: Response ok:', res.ok);
@@ -75,7 +85,7 @@ function ArticlePage() {
         setArticle(null);
         setLoading(false);
       });
-  }, [bobid, API_BASE]);
+  }, [bobid, API_BASE, isFromLatest]);
 
   if (loading) {
     console.log('ArticlePage: Currently loading...');
@@ -88,14 +98,15 @@ function ArticlePage() {
 
   if (!article) {
     console.log('ArticlePage: No article found');
+    const backPath = isFromLatest ? '/latest' : '/stored-articles';
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
         <h1 className="text-2xl font-bold text-gray-800 mb-4">Article Not Found</h1>
         <button
-          onClick={() => navigate('/stored-articles')}
+          onClick={() => navigate(backPath)}
           className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
         >
-          Back to Articles
+          {isFromLatest ? 'Back to Latest News' : 'Back to Articles'}
         </button>
       </div>
     );
@@ -130,7 +141,7 @@ function ArticlePage() {
           {/* Close Button */}
           <button
             className="absolute top-6 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold transition-colors"
-            onClick={() => navigate('/stored-articles')}
+            onClick={() => navigate(isFromLatest ? '/latest' : '/stored-articles')}
             aria-label="Close"
           >
             &times;
@@ -153,9 +164,11 @@ function ArticlePage() {
                   {article.topic}
                 </span>
               )}
-              <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
-                {article.source_name}
-              </span>
+              {article.source_name && article.source_name.trim() && (
+                <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
+                  {article.source_name}
+                </span>
+              )}
               {article.author && (
                 <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
                   By {article.author}
