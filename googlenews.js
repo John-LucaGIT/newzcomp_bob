@@ -1,49 +1,88 @@
 const axios = require('axios');
 const { JSDOM } = require('jsdom');
+const { google } = require('googleapis');
 require('dotenv').config();
-const API_KEY = process.env.GOOGLE_API_KEY;
+
+// Service Account Authentication
+const auth = new google.auth.GoogleAuth({
+  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY || './newzcomp-bob-a3812d1ce054.json',
+  scopes: ['https://www.googleapis.com/auth/cse']
+});
+
+// Create Custom Search client
+const customsearch = google.customsearch('v1');
 const CX = process.env.GOOGLE_CX;
 
 // Import AI utilities
 const { findRelevantArticleWithAI } = require('./ai_utils.js');
 
 async function searchNews(params) {
-  const baseUrl = 'https://www.googleapis.com/customsearch/v1';
-
-  const searchParams = new URLSearchParams(params);
-
-  searchParams.append('key', API_KEY);
-  searchParams.append('cx', CX);
-
-  const url = `${baseUrl}?${searchParams.toString()}`;
-
-  console.log("Making API call to URL:", url);
-
   try {
-    const res = await fetch(url);
-    const data = await res.json();
+    console.log("Generated params:", params);
 
-    if (!res.ok) {
-      console.error("Google API Error:", data.error?.message || data);
-      return [];
+    // Try service account authentication first
+    try {
+      const authClient = await auth.getClient();
+
+      const response = await customsearch.cse.list({
+        auth: authClient,
+        cx: CX,
+        q: params.q,
+        sort: params.sort,
+        dateRestrict: params.dateRestrict,
+        num: 10
+      });
+
+      const data = response.data;
+      console.log("✅ Service account authentication successful");
+
+      if (!data.items || data.items.length === 0) {
+        console.warn("No search results found for the given parameters.");
+        return [];
+      }
+
+      console.log(`Found ${data.items.length} search results`);
+      const processedResults = await processSearchResults(data.items, params.q);
+      return processedResults;
+
+    } catch (serviceAccountError) {
+      console.warn("Service account failed, trying API key fallback:", serviceAccountError.message);
+
+      // Fallback to API key method
+      const API_KEY = process.env.GOOGLE_API_KEY;
+      if (!API_KEY) {
+        throw new Error("No API key available for fallback");
+      }
+
+      const baseUrl = 'https://www.googleapis.com/customsearch/v1';
+      const searchParams = new URLSearchParams(params);
+      searchParams.append('key', API_KEY);
+      searchParams.append('cx', CX);
+
+      const url = `${baseUrl}?${searchParams.toString()}`;
+      console.log("Making API call with API key to URL:", url);
+
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("Google API Error:", data.error?.message || data);
+        return [];
+      }
+
+      if (!data.items || data.items.length === 0) {
+        console.warn("No search results found for the given parameters.");
+        return [];
+      }
+
+      console.log("✅ API key authentication successful");
+      console.log(`Found ${data.items.length} search results`);
+      const processedResults = await processSearchResults(data.items, params.q);
+      return processedResults;
     }
-
-    if (!data.items || data.items.length === 0) {
-      console.warn("No search results found for the given parameters.");
-      console.log("API Response:", data);
-      return [];
-    }
-
-    console.log(`Found ${data.items.length} search results`);
-    console.log("Sample result structure:", data.items[0]);
-
-    // Process results to diversify sources and convert section pages to specific articles
-    const processedResults = await processSearchResults(data.items, params.q);
-
-    return processedResults;
 
   } catch (error) {
-    console.error("Failed to fetch from Google API:", error);
+    console.error("Failed to fetch from Google API:", error.message);
     return [];
   }
 }
@@ -343,7 +382,7 @@ async function findAllArticleLinks(sectionUrl) {
   }
 }
 
-getNewsArticles = async (theme) => {
+const getNewsArticles = async (theme) => {
   const params = generateNewsParams(theme);
   console.log("Generated params:", params);
   const results = await searchNews(params);
