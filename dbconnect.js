@@ -370,6 +370,432 @@ async function logNotification(deviceToken, notificationType, title, body, paylo
   }
 }
 
+// ===== USER MANAGEMENT FUNCTIONS =====
+
+/**
+ * Create or update a user in the database
+ * @param {Object} userData - User data object
+ * @returns {Object} Result with success status and user info
+ */
+async function createOrUpdateUser(userData) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    const {
+      userID,
+      email,
+      firstName,
+      lastName,
+      isAuthenticated = false,
+      deviceInfo = null,
+      appVersion = null
+    } = userData;
+
+    // Check if user exists
+    const existingUser = await conn.query(
+      "SELECT id, email FROM users WHERE id = ? OR email = ?",
+      [userID, email]
+    );
+
+    let user;
+    if (existingUser.length > 0) {
+      // Update existing user
+      await conn.query(
+        `UPDATE users SET
+         first_name = ?,
+         last_name = ?,
+         is_authenticated = ?,
+         last_login_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? OR email = ?`,
+        [firstName, lastName, isAuthenticated, userID, email]
+      );
+
+      user = {
+        id: existingUser[0].id,
+        email: existingUser[0].email,
+        updated: true
+      };
+    } else {
+      // Create new user
+      await conn.query(
+        `INSERT INTO users (id, email, first_name, last_name, is_authenticated, last_login_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [userID, email, firstName, lastName, isAuthenticated]
+      );
+
+      user = {
+        id: userID,
+        email: email,
+        created: true
+      };
+    }
+
+    // Update or create device info if provided
+    if (deviceInfo && userID) {
+      await createOrUpdateUserDevice(userID, deviceInfo, appVersion);
+    }
+
+    // Update user analytics
+    await updateUserAnalytics(user.id, 'login');
+
+    // Log activity
+    await logUserActivity(user.id, 'login', { ip_address: deviceInfo?.ip_address });
+
+    return {
+      success: true,
+      user: user
+    };
+
+  } catch (err) {
+    console.error("Error creating/updating user:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Get user by ID or email
+ * @param {string} identifier - User ID or email
+ * @returns {Object|null} User object or null if not found
+ */
+async function getUserById(identifier) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    const user = await conn.query(
+      `SELECT u.*,
+       COUNT(DISTINCT ud.id) as device_count,
+       ua.total_articles_analyzed,
+       ua.total_articles_viewed
+       FROM users u
+       LEFT JOIN user_devices ud ON u.id = ud.user_id AND ud.is_active = TRUE
+       LEFT JOIN user_analytics ua ON u.id = ua.user_id
+       WHERE u.id = ? OR u.email = ?
+       GROUP BY u.id`,
+      [identifier, identifier]
+    );
+
+    if (user.length === 0) return null;
+
+    // Convert BigInt values to strings/numbers for JSON serialization
+    const userData = user[0];
+    Object.keys(userData).forEach(key => {
+      if (typeof userData[key] === 'bigint') {
+        userData[key] = Number(userData[key]);
+      }
+    });
+
+    return userData;
+
+  } catch (err) {
+    console.error("Error fetching user:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Create or update user device information
+ * @param {string} userId - User ID
+ * @param {Object} deviceInfo - Device information
+ * @param {string} appVersion - App version
+ * @returns {Object} Result with success status
+ */
+async function createOrUpdateUserDevice(userId, deviceInfo, appVersion) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    const {
+      deviceType = 'ios',
+      deviceModel = '',
+      osVersion = '',
+      bundleId = 'com.newzcomp.bob',
+      deviceToken = null
+    } = deviceInfo;
+
+    // Check if device exists for this user
+    const existingDevice = await conn.query(
+      "SELECT id FROM user_devices WHERE user_id = ? AND device_type = ? AND device_model = ?",
+      [userId, deviceType, deviceModel]
+    );
+
+    if (existingDevice.length > 0) {
+      // Update existing device
+      await conn.query(
+        `UPDATE user_devices SET
+         device_token = ?,
+         os_version = ?,
+         app_version = ?,
+         bundle_id = ?,
+         last_seen_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [deviceToken, osVersion, appVersion, bundleId, existingDevice[0].id]
+      );
+    } else {
+      // Create new device
+      await conn.query(
+        `INSERT INTO user_devices (user_id, device_token, device_type, device_model, os_version, app_version, bundle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [userId, deviceToken, deviceType, deviceModel, osVersion, appVersion, bundleId]
+      );
+    }
+
+    return { success: true };
+
+  } catch (err) {
+    console.error("Error creating/updating user device:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Update user preferences
+ * @param {string} userId - User ID
+ * @param {string} preferenceKey - Preference key
+ * @param {Object} preferenceValue - Preference value (will be JSON)
+ * @returns {Object} Result with success status
+ */
+async function updateUserPreferences(userId, preferenceKey, preferences) {
+  let connection;
+  try {
+    connection = await pool.getConnection();
+
+    console.log(`🔄 Updating preferences for user ${userId}, key: ${preferenceKey}`);
+    console.log(`📝 Preferences to save:`, preferences);
+
+    // Use INSERT ... ON DUPLICATE KEY UPDATE to handle both insert and update
+    const query = `
+      INSERT INTO user_preferences (user_id, preference_key, preference_value, created_at, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON DUPLICATE KEY UPDATE
+        preference_value = VALUES(preference_value),
+        updated_at = CURRENT_TIMESTAMP
+    `;
+
+    const result = await connection.execute(query, [
+      userId,
+      preferenceKey,
+      JSON.stringify(preferences)
+    ]);
+
+    console.log(`✅ Preferences updated successfully. Affected rows: ${result.affectedRows}`);
+
+    return {
+      success: true,
+      affectedRows: result.affectedRows,
+      preferences: preferences
+    };
+  } catch (error) {
+    console.error('Error updating user preferences:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+/**
+ * Get user preferences
+ * @param {string} userId - User ID
+ * @param {string} preferenceKey - Optional preference key to filter
+ * @returns {Object} User preferences
+ */
+async function getUserPreferences(userId, preferenceKey = null) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    let query = "SELECT preference_key, preference_value FROM user_preferences WHERE user_id = ?";
+    let params = [userId];
+
+    if (preferenceKey) {
+      query += " AND preference_key = ?";
+      params.push(preferenceKey);
+    }
+
+    const preferences = await conn.query(query, params);
+
+    // Convert to object with parsed JSON values
+    const result = {};
+    preferences.forEach(pref => {
+      try {
+        result[pref.preference_key] = JSON.parse(pref.preference_value);
+      } catch (e) {
+        result[pref.preference_key] = pref.preference_value;
+      }
+    });
+
+    return result;
+
+  } catch (err) {
+    console.error("Error fetching user preferences:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Log user activity
+ * @param {string} userId - User ID
+ * @param {string} activityType - Type of activity
+ * @param {Object} activityData - Additional activity data
+ * @returns {Object} Result with success status
+ */
+async function logUserActivity(userId, activityType, activityData = {}) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    await conn.query(
+      `INSERT INTO user_activity_log (user_id, activity_type, activity_data, ip_address, user_agent)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        userId,
+        activityType,
+        JSON.stringify(activityData),
+        activityData.ip_address || null,
+        activityData.user_agent || null
+      ]
+    );
+
+    return { success: true };
+
+  } catch (err) {
+    console.error("Error logging user activity:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Update user analytics
+ * @param {string} userId - User ID
+ * @param {string} activityType - Type of activity for analytics
+ * @returns {Object} Result with success status
+ */
+async function updateUserAnalytics(userId, activityType) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // Create analytics record if it doesn't exist
+    await conn.query(
+      `INSERT IGNORE INTO user_analytics (user_id) VALUES (?)`,
+      [userId]
+    );
+
+    // Update based on activity type
+    switch (activityType) {
+      case 'login':
+        await conn.query(
+          `UPDATE user_analytics SET
+           total_login_sessions = total_login_sessions + 1,
+           updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = ?`,
+          [userId]
+        );
+        break;
+      case 'analyze_article':
+        await conn.query(
+          `UPDATE user_analytics SET
+           total_articles_analyzed = total_articles_analyzed + 1,
+           last_analysis_date = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = ?`,
+          [userId]
+        );
+        break;
+      case 'view_article':
+        await conn.query(
+          `UPDATE user_analytics SET
+           total_articles_viewed = total_articles_viewed + 1,
+           updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = ?`,
+          [userId]
+        );
+        break;
+    }
+
+    return { success: true };
+
+  } catch (err) {
+    console.error("Error updating user analytics:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Get user overview with statistics
+ * @param {string} userId - User ID
+ * @returns {Object} User overview data
+ */
+async function getUserOverview(userId) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    const overview = await conn.query(
+      "SELECT * FROM user_overview WHERE id = ?",
+      [userId]
+    );
+
+    if (overview.length === 0) return null;
+
+    // Convert BigInt values to numbers for JSON serialization
+    const overviewData = overview[0];
+    Object.keys(overviewData).forEach(key => {
+      if (typeof overviewData[key] === 'bigint') {
+        overviewData[key] = Number(overviewData[key]);
+      }
+    });
+
+    return overviewData;
+
+  } catch (err) {
+    console.error("Error fetching user overview:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Delete user and all associated data
+ * @param {string} userId - User ID
+ * @returns {Object} Result with success status
+ */
+async function deleteUser(userId) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // MariaDB will cascade delete related records due to foreign key constraints
+    await conn.query("DELETE FROM users WHERE id = ?", [userId]);
+
+    return { success: true };
+
+  } catch (err) {
+    console.error("Error deleting user:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
 function closePool() {
   return pool.end().then(() => {
     console.log("Connection pool closed.");
@@ -393,5 +819,13 @@ module.exports = {
   deactivateDeviceToken,
   cleanupInvalidTokens,
   updateNotificationPreferences,
-  logNotification
+  logNotification,
+  createOrUpdateUser,
+  getUserById,
+  updateUserPreferences,
+  getUserPreferences,
+  logUserActivity,
+  updateUserAnalytics,
+  getUserOverview,
+  deleteUser
 };

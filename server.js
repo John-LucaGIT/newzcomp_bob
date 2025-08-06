@@ -22,7 +22,16 @@ const {
   deactivateDeviceToken,
   cleanupInvalidTokens,
   updateNotificationPreferences,
-  logNotification
+  logNotification,
+  // User management functions
+  createOrUpdateUser,
+  getUserById,
+  updateUserPreferences,
+  getUserPreferences,
+  logUserActivity,
+  updateUserAnalytics,
+  getUserOverview,
+  deleteUser
 } = require('./dbconnect');
 const { pushNotificationService } = require('./push_notify');
 const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','https://bob.newzcomp.com:3001'];
@@ -989,6 +998,368 @@ app.post('/analyze', async (req, res) => {
   }
 });
 
+// ===== USER API ENDPOINTS =====
+
+/**
+ * Health check for user API (must be before dynamic routes)
+ * GET /api/users/health
+ */
+app.get('/api/users/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'User API is healthy',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      createUser: 'POST /api/users',
+      getUser: 'GET /api/users/:identifier',
+      updatePreferences: 'POST /api/users/:userId/preferences',
+      getPreferences: 'GET /api/users/:userId/preferences',
+      getAnalytics: 'GET /api/users/:userId/analytics',
+      logActivity: 'POST /api/users/:userId/activity',
+      deleteUser: 'DELETE /api/users/:userId'
+    }
+  });
+});
+
+/**
+ * Create or update user information
+ * POST /api/users
+ * Body: UserPayload from iOS app
+ */
+app.post('/api/users', async (req, res) => {
+  try {
+    const {
+      userID,
+      email,
+      firstName,
+      lastName,
+      fullName,
+      isAuthenticated,
+      deviceInfo,
+      appVersion
+    } = req.body;
+
+    // Validation
+    if (!userID || !email || !firstName || !lastName) {
+      return res.status(400).json({
+        error: 'Missing required fields: userID, email, firstName, lastName are required'
+      });
+    }
+
+    // Extract IP and User Agent for tracking
+    const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+
+    // Prepare user data
+    const userData = {
+      userID,
+      email,
+      firstName,
+      lastName,
+      isAuthenticated: isAuthenticated || false,
+      deviceInfo: {
+        ...deviceInfo,
+        ip_address: requestIP,
+        user_agent: userAgent
+      },
+      appVersion
+    };
+
+    // Create or update user
+    const result = await createOrUpdateUser(userData);
+
+    // Log activity
+    await logUserActivity(userID, 'login', {
+      ip_address: requestIP,
+      user_agent: userAgent,
+      app_version: appVersion
+    });
+
+    res.json({
+      success: true,
+      message: result.user.created ? 'User created successfully' : 'User updated successfully',
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        created: result.user.created || false,
+        updated: result.user.updated || false
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in /api/users:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Get user information by ID or email
+ * GET /api/users/:identifier
+ */
+app.get('/api/users/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+
+    if (!identifier) {
+      return res.status(400).json({ error: 'User identifier is required' });
+    }
+
+    const user = await getUserById(identifier);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Remove sensitive information before sending
+    const sanitizedUser = {
+      id: user.id,
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      fullName: user.full_name,
+      isAuthenticated: user.is_authenticated,
+      createdAt: user.created_at,
+      lastLoginAt: user.last_login_at,
+      status: user.status,
+      deviceCount: user.device_count || 0,
+      totalArticlesAnalyzed: user.total_articles_analyzed || 0,
+      totalArticlesViewed: user.total_articles_viewed || 0
+    };
+
+    res.json({
+      success: true,
+      user: sanitizedUser
+    });
+
+  } catch (error) {
+    console.error('Error in /api/users/:identifier:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Update user preferences
+ * POST /api/users/:userId/preferences
+ * Body: { preferenceKey, preferenceValue }
+ */
+app.post('/api/users/:userId/preferences', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { preferenceKey = 'notifications', preferences } = req.body;
+
+    console.log(`📝 Updating preferences for user: ${userId}`);
+    console.log(`🔑 Preference key: ${preferenceKey}`);
+    console.log(`📋 New preferences:`, preferences);
+
+    // First, get existing preferences
+    const existingPrefs = await getUserPreferences(userId, preferenceKey);
+    console.log(`📖 Existing preferences:`, existingPrefs);
+
+    // Merge new preferences with existing ones
+    let mergedPreferences = {};
+
+    // Access the preferences using the preference key (e.g., existingPrefs.notifications)
+    if (existingPrefs && existingPrefs[preferenceKey]) {
+      mergedPreferences = { ...existingPrefs[preferenceKey] };
+    }
+
+    // Merge the new preferences
+    mergedPreferences = { ...mergedPreferences, ...preferences };
+
+    console.log(`🔀 Merged preferences:`, mergedPreferences);
+
+    // Update preferences with merged data
+    const result = await updateUserPreferences(userId, preferenceKey, mergedPreferences);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Preferences updated successfully',
+        preferences: mergedPreferences
+      });
+      console.log(`✅ Preferences updated successfully for user: ${userId}`);
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error || 'Failed to update preferences'
+      });
+      console.log(`❌ Failed to update preferences: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error in /users/:userId/preferences:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * Get user preferences
+ * GET /api/users/:userId/preferences
+ * GET /api/users/:userId/preferences?key=preference_key
+ */
+app.get('/api/users/:userId/preferences', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { key } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const preferences = await getUserPreferences(userId, key);
+
+    // If a specific key was requested, return just that preference value
+    // This ensures the iOS app gets the format it expects
+    if (key && preferences[key]) {
+      res.json({
+        success: true,
+        preferences: preferences[key]
+      });
+    } else {
+      // Return all preferences
+      res.json({
+        success: true,
+        preferences: preferences
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in /api/users/:userId/preferences:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Get user analytics/overview
+ * GET /api/users/:userId/analytics
+ */
+
+app.get('/api/users/:userId/analytics', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log(`📊 Getting analytics for user: ${userId}`);
+
+    const analytics = await getUserOverview(userId);
+
+    if (analytics && analytics.success) {
+      // Convert MySQL dates to ISO8601 format
+      const formattedAnalytics = {
+        ...analytics.data,
+        lastAnalysisDate: analytics.data.lastAnalysisDate ?
+          new Date(analytics.data.lastAnalysisDate).toISOString() : null,
+        memberSince: analytics.data.memberSince ?
+          new Date(analytics.data.memberSince).toISOString() : null,
+        lastLoginAt: analytics.data.lastLoginAt ?
+          new Date(analytics.data.lastLoginAt).toISOString() : null
+      };
+
+      res.json({
+        success: true,
+        analytics: formattedAnalytics
+      });
+      console.log(`✅ Analytics retrieved for user: ${userId}`);
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'User analytics not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error in /users/:userId/analytics:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * Log user activity
+ * POST /api/users/:userId/activity
+ * Body: { activityType, activityData }
+ */
+app.post('/api/users/:userId/activity', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { activityType, activityData = {} } = req.body;
+
+    if (!userId || !activityType) {
+      return res.status(400).json({
+        error: 'userId and activityType are required'
+      });
+    }
+
+    // Add request metadata
+    const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    const enrichedActivityData = {
+      ...activityData,
+      ip_address: requestIP,
+      user_agent: userAgent,
+      timestamp: new Date().toISOString()
+    };
+
+    // Log the activity
+    await logUserActivity(userId, activityType, enrichedActivityData);
+
+    // Update analytics if applicable
+    if (['analyze_article', 'view_article'].includes(activityType)) {
+      await updateUserAnalytics(userId, activityType);
+    }
+
+    res.json({
+      success: true,
+      message: 'Activity logged successfully'
+    });
+
+  } catch (error) {
+    console.error('Error in /api/users/:userId/activity:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Delete user account
+ * DELETE /api/users/:userId
+ */
+app.delete('/api/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { confirm } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    if (!confirm || confirm !== 'DELETE_MY_ACCOUNT') {
+      return res.status(400).json({
+        error: 'Account deletion requires confirmation. Send "confirm": "DELETE_MY_ACCOUNT" in request body.'
+      });
+    }
+
+    // Check if user exists
+    const user = await getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete user and all associated data
+    const result = await deleteUser(userId);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'User account deleted successfully'
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to delete user account' });
+    }
+
+  } catch (error) {
+    console.error('Error in DELETE /api/users/:userId:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down server...');
@@ -1007,8 +1378,8 @@ if (serverOptions) {
     console.log(`HTTPS server is running on https://bob.newzcomp.com:${port}`);
   });
 } else {
-  app.listen(port, () => {
-    console.log(`HTTP server is running on http://localhost:${port}`);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`HTTP server is running on http://0.0.0.0:${port}`);
     console.log('Note: Running in HTTP mode - SSL certificates not available');
   });
 }
