@@ -209,6 +209,7 @@ async function analyzeArticlesWithAINew(articles) {
   The reasoning should explain how you arrived at your conclusions and ratings.
 
   For the "topic" key, assign one of the following values ONLY: "all", "politics", "technology", "business", "health", "world", "sports", "entertainment", "science", "environment", "education", "breaking".
+  If the report does not fit into one of the category select category "all".
 
   Please provide a detailed response and analyze each article thoroughly.
 
@@ -216,11 +217,13 @@ async function analyzeArticlesWithAINew(articles) {
   Also add to the recommendations that readers should seek additional perspectives especially in a case where only one article was found by you.
 
   This is how your output will be structured:
+  Not we also add a sumarry of each article in the bias array. Here is an example of the output format:
   {
     "summary": "The articles discuss...",
     "bias" : [{
       "source": "CNN",
       "title": "Man dies after being pulled into an MRI by a metal chain he wore, police say",
+      "summary: "The article reports on a tragic incident...",
       "bias_rating": 2,
       "bias_direction": "neutral",
       "bias_analysis": "CNN's report on the MRI-related accident is straightforward, delivering factual information on the circumstances surrounding the incident. The article highlights the importance of safety around MRI machines without inserting opinion or speculative content. The narrative is factual, with an emphasis on reported details, indicating a neutral stance."

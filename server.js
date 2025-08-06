@@ -1012,6 +1012,8 @@ app.get('/api/users/health', (req, res) => {
     endpoints: {
       createUser: 'POST /api/users',
       getUser: 'GET /api/users/:identifier',
+      signup: 'POST /api/users/signup',
+      login: 'POST /api/users/login',
       updatePreferences: 'POST /api/users/:userId/preferences',
       getPreferences: 'GET /api/users/:userId/preferences',
       getAnalytics: 'GET /api/users/:userId/analytics',
@@ -1088,6 +1090,183 @@ app.post('/api/users', async (req, res) => {
 
   } catch (error) {
     console.error('Error in /api/users:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Email signup endpoint
+ * POST /api/users/signup
+ * Body: { firstName, lastName, email, password }
+ */
+app.post('/api/users/signup', async (req, res) => {
+  try {
+    const { firstName, lastName, email, password } = req.body;
+
+    // Validation
+    if (!firstName || !lastName || !email || !password) {
+      return res.status(400).json({
+        error: 'Missing required fields: firstName, lastName, email, and password are required'
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        error: 'Invalid email format'
+      });
+    }
+
+    // Validate password length
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: 'Password must be at least 6 characters long'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await getUserById(email);
+    if (existingUser) {
+      return res.status(409).json({
+        error: 'User with this email already exists'
+      });
+    }
+
+    // Extract IP and User Agent for tracking
+    const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+
+    // Generate unique user ID for email signup
+    const userID = `email_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Hash password using bcrypt
+    const bcrypt = require('bcrypt');
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Prepare user data
+    const userData = {
+      userID,
+      email,
+      firstName,
+      lastName,
+      isAuthenticated: true,
+      password: hashedPassword, // Store hashed password
+      deviceInfo: {
+        ip_address: requestIP,
+        user_agent: userAgent,
+        signup_method: 'email'
+      },
+      appVersion: req.body.appVersion || '1.0.0'
+    };
+
+    // Create user
+    const result = await createOrUpdateUser(userData);
+
+    // Log signup activity
+    await logUserActivity(userID, 'login', {
+      ip_address: requestIP,
+      user_agent: userAgent,
+      signup_method: 'email'
+    });
+
+    res.json({
+      success: true,
+      message: 'Account created successfully',
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        firstName: firstName,
+        lastName: lastName
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in /api/users/signup:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Email login endpoint
+ * POST /api/users/login
+ * Body: { email, password }
+ */
+app.post('/api/users/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({
+        error: 'Missing required fields: email and password are required'
+      });
+    }
+
+    // Get user by email
+    const user = await getUserById(email);
+    if (!user) {
+      return res.status(401).json({
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Check if user has a password (email signup user)
+    if (!user.password) {
+      return res.status(401).json({
+        error: 'This account was not created with email/password. Please use Apple Sign In.'
+      });
+    }
+
+    // Verify password
+    const bcrypt = require('bcrypt');
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Extract IP and User Agent for tracking
+    const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+
+    // Log login activity
+    await logUserActivity(user.id, 'login', {
+      ip_address: requestIP,
+      user_agent: userAgent,
+      login_method: 'email'
+    });
+
+    // Update last login
+    await createOrUpdateUser({
+      userID: user.id,
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      isAuthenticated: true,
+      deviceInfo: {
+        ip_address: requestIP,
+        user_agent: userAgent,
+        login_method: 'email'
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in /api/users/login:', error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1238,30 +1417,45 @@ app.get('/api/users/:userId/analytics', async (req, res) => {
     const { userId } = req.params;
     console.log(`📊 Getting analytics for user: ${userId}`);
 
-    const analytics = await getUserOverview(userId);
+    const overviewData = await getUserOverview(userId);
 
-    if (analytics && analytics.success) {
-      // Convert MySQL dates to ISO8601 format
+    if (overviewData) {
+      // Convert MySQL dates to ISO8601 format and map to iOS expected format (snake_case)
       const formattedAnalytics = {
-        ...analytics.data,
-        lastAnalysisDate: analytics.data.lastAnalysisDate ?
-          new Date(analytics.data.lastAnalysisDate).toISOString() : null,
-        memberSince: analytics.data.memberSince ?
-          new Date(analytics.data.memberSince).toISOString() : null,
-        lastLoginAt: analytics.data.lastLoginAt ?
-          new Date(analytics.data.lastLoginAt).toISOString() : null
+        total_articles_analyzed: overviewData.total_articles_analyzed || 0,
+        total_articles_viewed: overviewData.total_articles_viewed || 0,
+        device_count: overviewData.device_count || 0,
+        active_sessions: overviewData.total_login_sessions || 0,
+        last_analysis_date: overviewData.last_analysis_date ?
+          new Date(overviewData.last_analysis_date).toISOString() : null,
+        member_since: overviewData.created_at ?
+          new Date(overviewData.created_at).toISOString() : null,
+        last_login_at: overviewData.last_login_at ?
+          new Date(overviewData.last_login_at).toISOString() : null
       };
 
       res.json({
         success: true,
         analytics: formattedAnalytics
       });
-      console.log(`✅ Analytics retrieved for user: ${userId}`);
+      console.log(`✅ Analytics retrieved for user: ${userId}`, formattedAnalytics);
     } else {
-      res.status(404).json({
-        success: false,
-        error: 'User analytics not found'
+      // If no overview data, create default analytics with snake_case keys
+      const defaultAnalytics = {
+        total_articles_analyzed: 0,
+        total_articles_viewed: 0,
+        device_count: 0,
+        active_sessions: 0,
+        last_analysis_date: null,
+        member_since: null,
+        last_login_at: null
+      };
+
+      res.json({
+        success: true,
+        analytics: defaultAnalytics
       });
+      console.log(`✅ Default analytics returned for user: ${userId}`);
     }
   } catch (error) {
     console.error('Error in /users/:userId/analytics:', error);

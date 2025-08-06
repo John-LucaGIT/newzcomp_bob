@@ -388,6 +388,7 @@ async function createOrUpdateUser(userData) {
       firstName,
       lastName,
       isAuthenticated = false,
+      password = null,
       deviceInfo = null,
       appVersion = null
     } = userData;
@@ -418,12 +419,20 @@ async function createOrUpdateUser(userData) {
         updated: true
       };
     } else {
-      // Create new user
-      await conn.query(
-        `INSERT INTO users (id, email, first_name, last_name, is_authenticated, last_login_at)
-         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-        [userID, email, firstName, lastName, isAuthenticated]
-      );
+      // Create new user - include password for email signups
+      if (password) {
+        await conn.query(
+          `INSERT INTO users (id, email, password, first_name, last_name, is_authenticated, last_login_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [userID, email, password, firstName, lastName, isAuthenticated]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO users (id, email, first_name, last_name, is_authenticated, last_login_at)
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [userID, email, firstName, lastName, isAuthenticated]
+        );
+      }
 
       user = {
         id: userID,
@@ -748,12 +757,32 @@ async function getUserOverview(userId) {
   try {
     conn = await pool.getConnection();
 
+    // Query user data with analytics and device count
     const overview = await conn.query(
-      "SELECT * FROM user_overview WHERE id = ?",
+      `SELECT
+        u.id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.created_at,
+        u.last_login_at,
+        COALESCE(ua.total_articles_analyzed, 0) as total_articles_analyzed,
+        COALESCE(ua.total_articles_viewed, 0) as total_articles_viewed,
+        COALESCE(ua.total_login_sessions, 0) as total_login_sessions,
+        ua.last_analysis_date,
+        COUNT(DISTINCT ud.id) as device_count
+       FROM users u
+       LEFT JOIN user_analytics ua ON u.id = ua.user_id
+       LEFT JOIN user_devices ud ON u.id = ud.user_id AND ud.is_active = TRUE
+       WHERE u.id = ?
+       GROUP BY u.id, ua.user_id`,
       [userId]
     );
 
-    if (overview.length === 0) return null;
+    if (overview.length === 0) {
+      // If user doesn't exist, return null
+      return null;
+    }
 
     // Convert BigInt values to numbers for JSON serialization
     const overviewData = overview[0];
