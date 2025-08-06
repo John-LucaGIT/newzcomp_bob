@@ -166,6 +166,210 @@ async function getLatestArticlesByTheme(theme) {
   }
 }
 
+// ===== PUSH NOTIFICATION DATABASE FUNCTIONS =====
+
+/**
+ * Register or update a device token for push notifications
+ */
+async function registerDeviceToken(deviceData) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // Check if device token already exists
+    const existing = await conn.query(
+      "SELECT id FROM device_tokens WHERE device_token = ?",
+      [deviceData.device_token]
+    );
+
+    if (existing.length > 0) {
+      // Update existing record
+      await conn.query(
+        `UPDATE device_tokens SET
+         app_version = ?,
+         device_model = ?,
+         os_version = ?,
+         last_active = CURRENT_TIMESTAMP,
+         active = true
+         WHERE device_token = ?`,
+        [
+          deviceData.app_version,
+          deviceData.device_model,
+          deviceData.os_version,
+          deviceData.device_token
+        ]
+      );
+      console.log('Device token updated:', deviceData.device_token.substring(0, 10) + '...');
+      return { success: true, action: 'updated' };
+    } else {
+      // Insert new record
+      await conn.query(
+        `INSERT INTO device_tokens (
+          device_token, platform, app_version, bundle_id,
+          device_model, os_version, user_preferences, notification_categories
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          deviceData.device_token,
+          deviceData.platform || 'ios',
+          deviceData.app_version,
+          deviceData.bundle_id || 'com.newzcomp.bob',
+          deviceData.device_model,
+          deviceData.os_version,
+          JSON.stringify(deviceData.user_preferences || {}),
+          JSON.stringify(deviceData.notification_categories || ['breaking_news', 'analysis_complete', 'weekly_report'])
+        ]
+      );
+      console.log('Device token registered:', deviceData.device_token.substring(0, 10) + '...');
+      return { success: true, action: 'created' };
+    }
+  } catch (err) {
+    console.error("Error registering device token:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Get all active device tokens for push notifications
+ */
+async function getActiveDeviceTokens(platform = 'ios') {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const res = await conn.query(
+      "SELECT device_token, notification_categories, user_preferences FROM device_tokens WHERE active = true AND platform = ?",
+      [platform]
+    );
+    return res;
+  } catch (err) {
+    console.error("Error fetching active device tokens:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Get device tokens that want a specific notification type
+ */
+async function getDeviceTokensForNotificationType(notificationType, platform = 'ios') {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const res = await conn.query(
+      `SELECT device_token, user_preferences
+       FROM device_tokens
+       WHERE active = true
+       AND platform = ?
+       AND JSON_CONTAINS(notification_categories, ?)`,
+      [platform, JSON.stringify(notificationType)]
+    );
+    return res;
+  } catch (err) {
+    console.error("Error fetching device tokens for notification type:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Deactivate a device token
+ */
+async function deactivateDeviceToken(deviceToken) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.query(
+      "UPDATE device_tokens SET active = false WHERE device_token = ?",
+      [deviceToken]
+    );
+    console.log('Device token deactivated:', deviceToken.substring(0, 10) + '...');
+    return { success: true };
+  } catch (err) {
+    console.error("Error deactivating device token:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Clean up invalid/expired device tokens
+ */
+async function cleanupInvalidTokens() {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    // Deactivate tokens that haven't been active for 30 days
+    const result = await conn.query(
+      "UPDATE device_tokens SET active = false WHERE last_active < DATE_SUB(NOW(), INTERVAL 30 DAY) AND active = true"
+    );
+    console.log(`Cleaned up ${result.affectedRows} inactive device tokens`);
+    return { success: true, cleaned: result.affectedRows };
+  } catch (err) {
+    console.error("Error cleaning up device tokens:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Update user notification preferences
+ */
+async function updateNotificationPreferences(deviceToken, preferences) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.query(
+      "UPDATE device_tokens SET user_preferences = ?, notification_categories = ? WHERE device_token = ?",
+      [
+        JSON.stringify(preferences.user_preferences || {}),
+        JSON.stringify(preferences.notification_categories || ['breaking_news', 'analysis_complete', 'weekly_report']),
+        deviceToken
+      ]
+    );
+    console.log('Notification preferences updated for:', deviceToken.substring(0, 10) + '...');
+    return { success: true };
+  } catch (err) {
+    console.error("Error updating notification preferences:", err);
+    throw err;
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
+/**
+ * Log a sent notification
+ */
+async function logNotification(deviceToken, notificationType, title, body, payload, status = 'sent', errorMessage = null) {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.query(
+      `INSERT INTO notification_logs
+       (device_token, notification_type, title, body, payload, delivery_status, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        deviceToken,
+        notificationType,
+        title,
+        body,
+        JSON.stringify(payload),
+        status,
+        errorMessage
+      ]
+    );
+  } catch (err) {
+    console.error("Error logging notification:", err);
+    // Don't throw here as this is just logging
+  } finally {
+    if (conn) await conn.end();
+  }
+}
+
 function closePool() {
   return pool.end().then(() => {
     console.log("Connection pool closed.");
@@ -174,4 +378,20 @@ function closePool() {
   });
 }
 
-module.exports = { asyncFunction, closePool, getHistoricArticleMetadata, getHistoricArticleById, getLatestArticleById, loadAllowedDomains, insertDailyNewsArticles, getLatestArticlesByTheme };
+module.exports = {
+  asyncFunction,
+  closePool,
+  getHistoricArticleMetadata,
+  getHistoricArticleById,
+  getLatestArticleById,
+  loadAllowedDomains,
+  insertDailyNewsArticles,
+  getLatestArticlesByTheme,
+  registerDeviceToken,
+  getActiveDeviceTokens,
+  getDeviceTokensForNotificationType,
+  deactivateDeviceToken,
+  cleanupInvalidTokens,
+  updateNotificationPreferences,
+  logNotification
+};

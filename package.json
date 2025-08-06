@@ -24,6 +24,7 @@
     "jsdom": "^26.1.0",
     "mariadb": "^3.4.2",
     "morgan": "^1.10.0",
+    "node-apn": "^3.0.0",
     "nodemailer": "^7.0.3",
     "openai": "^4.96.0",
     "puppeteer": "^24.7.2",

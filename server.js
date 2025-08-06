@@ -8,33 +8,59 @@ const fs = require('fs');
 const https = require('https');
 require('dotenv').config();
 const { parseAnalysisSection } = require('./decode.js');
-const { asyncFunction, getHistoricArticleMetadata, getHistoricArticleById, getLatestArticleById, closePool, loadAllowedDomains, getLatestArticlesByTheme } = require('./dbconnect');
-const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','http://192.168.86.52:3001'];
+const {
+  asyncFunction,
+  getHistoricArticleMetadata,
+  getHistoricArticleById,
+  getLatestArticleById,
+  closePool,
+  loadAllowedDomains,
+  getLatestArticlesByTheme,
+  registerDeviceToken,
+  getActiveDeviceTokens,
+  getDeviceTokensForNotificationType,
+  deactivateDeviceToken,
+  cleanupInvalidTokens,
+  updateNotificationPreferences,
+  logNotification
+} = require('./dbconnect');
+const { pushNotificationService } = require('./push_notify');
+const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','https://bob.newzcomp.com:3001'];
 const app = express();
 const port = process.env.PORT || 3001;
 const { utils } = require('./utils');
 const corsOptions = {
   origin: (origin, callback) => {
-    if (allowedOrigins.includes(origin)) {
+    console.log('CORS Request from origin:', origin);
+    // Allow requests without origin (like from Node.js scripts, Postman, curl)
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.error(`CORS error: Origin ${origin} not allowed`);
       callback(new Error('Not allowed by CORS'), false);
     }
   },
-  methods: ['POST', 'GET'],
+  methods: ['POST', 'GET', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
-
 // SSL options with fallback for development
 let serverOptions = null;
 try {
   // Try multiple SSL certificate paths
+
   const sslPaths = [
     { key: '/home/cyberfx/ssl/privkey.pem', cert: '/home/cyberfx/ssl/fullchain.pem' },
     { key: '/etc/letsencrypt/live/newzcomp.com/privkey.pem', cert: '/etc/letsencrypt/live/newzcomp.com/fullchain.pem' },
     { key: '/etc/letsencrypt/live/bob.newzcomp.com/privkey.pem', cert: '/etc/letsencrypt/live/bob.newzcomp.com/fullchain.pem' }
   ];
+
+  console.log('Looking for SSL certs...');
+  sslPaths.forEach(p => {
+    console.log(`Checking: key = ${p.key}, cert = ${p.cert}`);
+    console.log('Key exists?', fs.existsSync(p.key));
+    console.log('Cert exists?', fs.existsSync(p.cert));
+  });
+
 
   for (const paths of sslPaths) {
     if (fs.existsSync(paths.key) && fs.existsSync(paths.cert)) {
@@ -216,6 +242,38 @@ app.post('/analyze', async (req, res) => {
 
     } catch (notificationError) {
       console.error('Notification setup failed:', notificationError.message);
+    }
+
+    // ===== SEND PUSH NOTIFICATION FOR ANALYSIS COMPLETE =====
+    try {
+      // Get devices that want analysis complete notifications
+      const devicesForAnalysis = await getDeviceTokensForNotificationType('analysis_complete');
+
+      if (devicesForAnalysis.length > 0) {
+        const deviceTokens = devicesForAnalysis.map(device => device.device_token);
+
+        // Create analysis complete notification
+        const notificationData = pushNotificationService.createAnalysisCompleteNotification({
+          title: `Analysis Complete: ${analysisTitle}`,
+          body: `Your article analysis is ready. Tap to view the results.`,
+          id: analysisData.bobid || null,
+          article_url: url,
+          bias_score: cleanedAnalysis.bias_rating
+        });
+
+        // Send notification to all devices
+        const pushResults = await pushNotificationService.sendCustomNotification(deviceTokens, notificationData);
+
+        // Log notifications sent
+        for (const deviceToken of deviceTokens) {
+          await logNotification(deviceToken, 'analysis_complete', `Analysis Complete: ${analysisTitle}`, 'Your article analysis is ready.', 'sent');
+        }
+
+        console.log(`Sent analysis complete notifications to ${deviceTokens.length} devices`);
+      }
+    } catch (pushError) {
+      // Don't fail the request if push notifications fail
+      console.error('Push notification failed:', pushError.message);
     }
 
     // Send successful response to client
@@ -452,6 +510,482 @@ app.get('/latest/:id', async (req, res) => {
   } catch (error) {
     console.error(`Error fetching article with ID ${id}:`, error.message);
     res.status(500).json({ error: 'Failed to fetch article' });
+  }
+});
+
+app.get('/whitelist', async (req, res) => {
+  try {
+    const allowedDomains = await loadAllowedDomains();
+    if (!allowedDomains || !allowedDomains.length) {
+      return res.status(404).json({ error: 'No allowed domains found' });
+    }
+    res.json({ allowed_domains: allowedDomains });
+  } catch (error) {
+    console.error('Error fetching allowed domains:', error.message);
+    res.status(500).json({ error: 'Failed to fetch allowed domains' });
+  }
+});
+// ===== PUSH NOTIFICATION ENDPOINTS =====
+
+/**
+ * Register device for push notifications
+ * POST /register-device
+ * Body: { device_token, user_id?, notification_preferences? }
+ */
+app.post('/register-device', async (req, res) => {
+  try {
+    const { device_token, user_id, notification_preferences, platform, app_version, device_model, os_version, bundle_id } = req.body;
+
+    if (!device_token) {
+      return res.status(400).json({ error: 'Device token is required' });
+    }
+
+    // Set default preferences if not provided
+    const preferences = notification_preferences || {
+      breaking_news: true,
+      analysis_complete: true,
+      weekly_report: false
+    };
+
+    // Create device data object matching the function signature
+    const deviceData = {
+      device_token,
+      platform: platform || 'ios',
+      app_version,
+      bundle_id: bundle_id || 'com.newzcomp.bob',
+      device_model,
+      os_version,
+      user_preferences: preferences,
+      notification_categories: ['breaking_news', 'analysis_complete', 'weekly_report']
+    };
+
+    const result = await registerDeviceToken(deviceData);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Device registered successfully',
+        device_id: result.device_id
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to register device' });
+    }
+  } catch (error) {
+    console.error('Error in /register-device:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Update notification preferences for a device
+ * POST /update-preferences
+ * Body: { device_token, notification_preferences }
+ */
+app.post('/update-preferences', async (req, res) => {
+  try {
+    const { device_token, notification_preferences } = req.body;
+
+    if (!device_token || !notification_preferences) {
+      return res.status(400).json({ error: 'Device token and notification preferences are required' });
+    }
+
+    const result = await updateNotificationPreferences(device_token, notification_preferences);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Notification preferences updated successfully'
+      });
+    } else {
+      res.status(404).json({ error: 'Device not found' });
+    }
+  } catch (error) {
+    console.error('Error in /update-preferences:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Unregister device from push notifications
+ * DELETE /unregister-device
+ * Body: { device_token }
+ */
+app.delete('/unregister-device', async (req, res) => {
+  try {
+    const { device_token } = req.body;
+
+    if (!device_token) {
+      return res.status(400).json({ error: 'Device token is required' });
+    }
+
+    const result = await deactivateDeviceToken(device_token);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Device unregistered successfully'
+      });
+    } else {
+      res.status(404).json({ error: 'Device not found' });
+    }
+  } catch (error) {
+    console.error('Error in /unregister-device:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Send manual push notification (admin/testing endpoint)
+ * POST /send-notification
+ * Body: { notification_type, title, body, data?, target_devices? }
+ */
+// Update your /send-notification endpoint to handle both custom and typed notifications
+app.post('/send-notification', async (req, res) => {
+  try {
+    const {
+      title,
+      body,
+      subtitle,
+      badge,
+      sound,
+      category,
+      threadId,
+      contentAvailable,
+      mutableContent,
+      priority,
+      data,
+      notification_type,
+      target_devices
+    } = req.body;
+
+    // Validation - either notification_type OR (title AND body) is required
+    if (!notification_type && (!title || !body)) {
+      return res.status(400).json({
+        error: 'Either notification_type OR both title and body are required'
+      });
+    }
+
+    // Get device tokens
+    let deviceTokens = [];
+
+    if (target_devices && target_devices.length > 0) {
+      deviceTokens = target_devices;
+    } else {
+      // Get all registered devices using your existing database function
+      const allDevices = await getActiveDeviceTokens();
+      deviceTokens = allDevices.map(device => device.device_token);
+    }
+
+    if (deviceTokens.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No device tokens found'
+      });
+    }
+
+    // Prepare notification data
+    let notificationData;
+
+    if (notification_type) {
+      // Use predefined templates
+      switch (notification_type) {
+        case 'breaking_news':
+          notificationData = pushNotificationService.createBreakingNewsNotification({
+            title: title || '🚨 Breaking News',
+            body: body || 'Important news update',
+            category: data?.category,
+            url: data?.article_url,
+            id: data?.article_id,
+            bias_score: data?.bias_score
+          });
+          break;
+        case 'analysis_complete':
+          notificationData = pushNotificationService.createAnalysisCompleteNotification({
+            title: title || 'Analysis Complete',
+            body: body || 'Your analysis is ready',
+            id: data?.analysis_id,
+            bias_score: data?.bias_score,
+            article_url: data?.article_url
+          });
+          break;
+        case 'weekly_report':
+          notificationData = pushNotificationService.createWeeklyReportNotification({
+            title: title || 'Weekly Report',
+            body: body || 'Your weekly report is ready',
+            articles_analyzed: data?.articles_analyzed,
+            week_start: data?.week_start,
+            average_bias: data?.average_bias
+          });
+          break;
+        default:
+          notificationData = {
+            title: title || 'NewzComp Notification',
+            body: body || 'You have a new notification',
+            data: data || {}
+          };
+      }
+    } else {
+      // Use custom notification data directly from request
+      notificationData = {
+        title,
+        body,
+        subtitle,
+        badge,
+        sound,
+        category,
+        threadId,
+        contentAvailable,
+        mutableContent,
+        priority,
+        data: data || {}
+      };
+    }
+
+    // Send the notification
+    const result = await pushNotificationService.sendCustomNotification(
+      deviceTokens,
+      notificationData
+    );
+
+    console.log('📱 Notification sent:', {
+      title: notificationData.title,
+      body: notificationData.body,
+      sent: result.sent,
+      failed: result.failed
+    });
+
+    res.json({
+      success: true,
+      message: 'Notification sent successfully',
+      sent_count: result.sent,
+      failed_count: result.failed,
+      results: result
+    });
+
+  } catch (error) {
+    console.error('❌ Error sending notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send notification',
+      error: error.message
+    });
+  }
+});
+/**
+ * Get device statistics (admin endpoint)
+ * GET /notification-stats
+ */
+app.get('/notification-stats', async (req, res) => {
+  try {
+    const activeDevices = await getActiveDeviceTokens();
+
+    // Count devices by notification preferences
+    const stats = {
+      total_active_devices: activeDevices.length,
+      breaking_news_enabled: activeDevices.filter(d => d.breaking_news).length,
+      analysis_complete_enabled: activeDevices.filter(d => d.analysis_complete).length,
+      weekly_report_enabled: activeDevices.filter(d => d.weekly_report).length
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error in /notification-stats:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ===== ENHANCED ANALYZE ENDPOINT WITH PUSH NOTIFICATIONS =====
+// Modify the existing analyze endpoint to send push notifications when analysis is complete
+app.post('/analyze', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'No URL provided' });
+    const validator = require('validator');
+
+    // Check if URL is valid
+    if (!url || !validator.isURL(url)) {
+      return res.status(400).json({ error: 'Invalid URL provided' });
+    }
+    const allowedDomains = await loadAllowedDomains();
+    const submittedDomain = new URL(url).hostname.replace(/^www\./, '');
+    const isAllowed = allowedDomains.some((domain) => submittedDomain.endsWith(domain));
+
+    if (!isAllowed) {
+      const messageBody = `
+      🚫 NewzComp - Unsupported Domain Attempt
+
+      A user attempted to analyze an article from an unsupported domain.
+
+      🕒 ${new Date().toLocaleString()}
+      🌐 IP: ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}
+      📱 UA: ${req.headers['user-agent'] || 'Unknown'}
+      📦 Payload: ${JSON.stringify(req.body, null, 2).slice(0, 400)}
+      ❌ Requested Domain: ${submittedDomain}
+      ❌ Requested URL: ${url}
+      `.trim();
+
+      const htmlText = `
+        <h1>NewzComp - Unsupported Domain Attempt</h1>
+        <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>IP:</strong> ${req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown'}</p>
+        <p><strong>User Agent:</strong> ${req.headers['user-agent'] || 'Unknown'}</p>
+        <p><strong>Payload:</strong> ${JSON.stringify(req.body, null, 2).slice(0, 400)}</p>
+        <p><strong>Requested Domain:</strong> ${submittedDomain}</p>
+        <p><strong>Requested URL:</strong> ${url}</p>
+      `;
+
+      await utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob Unsupported Domain Attempt 🚫', messageBody, htmlText);
+
+      return res.status(403).json({ error: `Domain not allowed for analysis: ${submittedDomain}` });
+    }
+
+    const keyword = await utils.extractKeywords(url);
+    const relatedArticles = await utils.fetchRelatedArticles(keyword, url, allowedDomains);
+    console.log('Related Articles:', relatedArticles);
+    if (!relatedArticles.length) {
+      return res.status(404).json({ error: 'No related articles found' });
+    }
+    const scrapedArticles = await utils.scrapeArticles(relatedArticles);
+    console.log('Scraped Articles:', scrapedArticles);
+    if (!scrapedArticles.length) {
+      return res.status(404).json({ error: 'No articles scraped' });
+    }
+    const analysis = await utils.analyzeArticlesWithAINew(scrapedArticles);
+    // Extract article info for metadata
+    const { title, description, imageUrl, author } = await utils.getArticleInfo(url);
+
+    let cleanedAnalysis = analysis;
+    if (typeof analysis === 'string') {
+      cleanedAnalysis = parseAnalysisSection(analysis);
+    }
+    if (!cleanedAnalysis || typeof cleanedAnalysis !== 'object') {
+      cleanedAnalysis = { error: 'Failed to parse analysis' };
+    }
+    // Use analysis fields for DB and response
+    const analysisTitle = cleanedAnalysis.title || title || '';
+    const analysisTopic = cleanedAnalysis.topic || 'all';
+    const analysisSummary = cleanedAnalysis.summary || description || '';    const analysisRelated = cleanedAnalysis.related_articles || scrapedArticles.map((article) => ({
+        source: article.source,
+        title: article.title,
+        url: article.url,
+        content: article.text,
+    }));
+
+    // Save to DB
+    const source_url = url;
+    const source_name = scrapedArticles[0].source;
+    const analysisData = {
+      analysis: cleanedAnalysis,
+      title: analysisTitle,
+      topic: analysisTopic,
+      summary: analysisSummary,
+      image_url: imageUrl || '',
+      author: author || '',
+      related_articles: analysisRelated,
+    };
+    console.log('Saving to DB:', { title: analysisTitle, topic: analysisTopic, analysisData, source_url });
+    try {
+      await asyncFunction(
+        analysisTitle,
+        analysisData,
+        source_name,
+        source_url,
+        analysisTopic,
+        analysisSummary,
+        imageUrl || '',
+        author || '',
+        analysisRelated
+      );
+      console.log('Data saved to DB');
+    } catch (err) {
+      console.error('Error saving to DB:', err);
+    }
+
+    // Send email notification and response
+    try {
+      const cleanedBody = JSON.stringify(req.body, null, 2).slice(0, 400);
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      const requestIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown';
+
+      const messageBody = `
+      📰 NewzComp Analysis Request | BOB
+
+        🔍 /analyze endpoint used
+        🕒 ${new Date().toLocaleString()}
+        🌐 IP: ${requestIP}
+        📱 UA: ${userAgent}
+        📦 Payload: ${cleanedBody}
+
+        🔑 Generated Search Query: ${keyword}
+
+        📊 Bob's Analysis: ${analysis}
+      `.trim();
+
+      const htmlText = `
+        <h1>NewzComp Analysis Request</h1>
+        <p><strong>Endpoint:</strong> /analyze</p>
+        <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>IP:</strong> ${requestIP}</p>
+        <p><strong>User Agent:</strong> ${userAgent}</p>
+        <p><strong>Payload:</strong> ${cleanedBody}</p>
+        <p><strong>Generated Search Query:</strong> ${keyword}</p>
+        <p><strong>Bob's Analysis:</strong> ${analysis}</p>
+      `;
+
+      // Send email notification (non-blocking, with error handling)
+      utils.sendEmail(process.env.EMAIL_USER, process.env.EMAIL_TO, 'NewzComp - Bob API Notification ✔', messageBody, htmlText)
+        .catch(emailError => {
+          console.error('Email notification failed:', emailError.message);
+        });
+
+    } catch (notificationError) {
+      console.error('Notification setup failed:', notificationError.message);
+    }
+
+    // ===== PUSH NOTIFICATION LOGIC =====
+    try {
+      const deviceTokens = await getDeviceTokensForNotificationType('analysis_complete');
+
+      if (deviceTokens.length > 0) {
+        // Create notification data
+        const notificationData = pushNotificationService.createAnalysisCompleteNotification({
+          title: 'Analysis Complete',
+          body: 'Your analysis is ready',
+          id: analysisData.bobid || null,
+          article_url: url,
+          bias_score: cleanedAnalysis.bias_rating
+        });
+
+        // Send push notification to all devices subscribed to analysis_complete
+        const pushResults = await pushNotificationService.sendCustomNotification(
+          deviceTokens.map(dt => dt.device_token),
+          notificationData
+        );
+
+        // Log the notification
+        for (const deviceToken of deviceTokens) {
+          await logNotification(deviceToken.device_token, 'analysis_complete', 'Analysis Complete', 'Your analysis is ready', 'sent');
+        }
+
+        console.log(`Sent analysis complete notifications to ${deviceTokens.length} devices`);
+      }
+    } catch (pushError) {
+      console.error('Error sending push notification:', pushError.message);
+    }
+
+    // Send successful response to client
+    res.json({
+      analysis: cleanedAnalysis,
+      title: analysisTitle,
+      topic: analysisTopic,
+      summary: analysisSummary,
+      image_url: imageUrl || '',
+      author: author || '',
+      related_articles: analysisRelated,
+    });
+  } catch (error) {
+    console.error('Error in /analyze endpoint:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

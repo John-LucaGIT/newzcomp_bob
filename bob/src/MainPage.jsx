@@ -49,10 +49,10 @@ function Metadata() {
     <Helmet>
       <title>Bob - AI News Commentary by NewzComp</title>
       <meta name="description" content="Meet Bob, your AI-powered news assistant by NewzComp. Analyze news articles for bias, get summaries, and explore related coverage. Visit newzcomp.com for more." />
-      <meta name="keywords" content="AI news analysis, news bias detection, article summaries, related news, NewzComp, Bob AI" />
+      <meta name="keywords" content="AI news analysis, news bias detection, article summaries, related news, NewzComp, Bob AI, News Comparison, AI NEWS COMPARISON" />
       <meta name="author" content="NewzComp" />
       <meta property="og:title" content="Bob - AI News Commentary by NewzComp" />
-      <meta property="og:description" content="Discover Bob, the AI-powered tool by NewzComp that analyzes news articles for bias, provides summaries, and finds related stories. Visit newzcomp.com for more." />
+      <meta property="og:description" content="Discover Bob, the AI-powered tool by NewzComp that analyzes news articles for bias, provides summaries, and finds related stories. NewzComp's AI News Comparison Service. Visit newzcomp.com for more." />
       <meta property="og:url" content="https://newzcomp.com" />
       <meta property="og:type" content="website" />
       <meta property="og:image" content="/assets/tricolorblack.svg" />
