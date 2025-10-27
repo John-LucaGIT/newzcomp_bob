@@ -75,10 +75,20 @@ async function findRelevantArticleWithAI(linkCandidates, searchQuery) {
     return null;
   }
 
-  const prompt = `
-You are a news article selector. Given a search query and a list of article links with their titles and context, select the MOST RELEVANT article that best matches the search query.
+  // Strip 'after:YYYY-MM-DD' and 'before:YYYY-MM-DD' from searchQuery
+  const cleanedQuery = searchQuery.replace(/\b(after|before):\d{4}-\d{2}-\d{2}\b/g, '').trim();
 
-Search Query: "${searchQuery}"
+  console.log(`Finding relevant article for query: "${cleanedQuery}" among ${linkCandidates.length} candidates.`);
+  console.log('Candidates:', linkCandidates.map((c) => c.href));
+  console.log('Candidates:', linkCandidates.map((c) => ({
+    url: c.href,
+    title: c.text,
+    context: c.context
+  })));
+  const prompt = `
+- You are a news article selector. Given a search query and a list of article links with their titles and context, select the MOST RELEVANT article that relates to the search query.
+- The list of articles may include general pages or pages that have nothing to do with the query or podcasts and video content but you are looking for news articles.
+Search Query: "${cleanedQuery}"
 
 Article Candidates:
 ${linkCandidates.map((item, index) =>
@@ -99,11 +109,13 @@ Your response (just the number or "NONE"):`;
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 10,
-    temperature: 0.1
+    max_completion_tokens: 10
   });
 
+  console.log('OpenAI response:', JSON.stringify(response.choices));
   const choice = response.choices[0].message.content.trim();
+
+  console.log(`AI selected choice: "${choice}"`);
 
   if (choice === "NONE" || isNaN(parseInt(choice))) {
     return null;

@@ -300,9 +300,17 @@ function ArticlePage() {
 
                     {/* Bias Analysis */}
                     {bias.bias_analysis && (
-                      <div>
+                      <div className="mb-4">
                         <h5 className="text-md font-semibold text-gray-700 mb-3">Bias Analysis:</h5>
                         <p className="text-gray-700 leading-relaxed">{bias.bias_analysis}</p>
+                      </div>
+                    )}
+
+                    {/* Article Summary (if present and not empty) */}
+                    {bias.summary && bias.summary.trim() && (
+                      <div>
+                        <h5 className="text-md font-semibold text-gray-700 mb-3">Article Summary:</h5>
+                        <p className="text-gray-700 leading-relaxed">{bias.summary}</p>
                       </div>
                     )}
                   </div>

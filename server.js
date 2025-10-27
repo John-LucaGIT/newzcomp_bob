@@ -34,7 +34,7 @@ const {
   deleteUser
 } = require('./dbconnect');
 const { pushNotificationService } = require('./push_notify');
-const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','https://bob.newzcomp.com:3001'];
+const allowedOrigins = ['https://bob.newzcomp.com', 'http://localhost:5173', 'https://localhost:5173', 'http://localhost:3001', 'https://localhost:3001', 'http://192.168.86.240:5173', 'http://192.168.86.231:5173', 'https://app.newzcomp.com', 'app.newzcomp.com','http://192.168.86.248:5173','https://bob.newzcomp.com:3001', 'http://192.168.86.92:5173'];
 const app = express();
 const port = process.env.PORT || 3001;
 const { utils } = require('./utils');
@@ -342,15 +342,19 @@ app.post('/feedback', async (req, res) => {
 // ===== LATEST BREAKING NEWS ENDPOINT =====
 const { parseStringPromise } = require('xml2js');
 
-// ===== LATEST BREAKING NEWS ENDPOINT (Refactored for theme & Google Search) =====
+// ===== LATEST BREAKING NEWS ENDPOINT (Refactored for theme & time filtering) =====
 app.get('/latest', async (req, res) => {
   try {
     let theme = req.query.theme;
+    const start_date = req.query.start_date;
+    const end_date = req.query.end_date;
+
     if (!theme) {
       return res.status(400).json({ error: 'Missing required theme parameter' });
     }
     theme = theme.toLowerCase(); // Ensure theme is lowercase
-    // Query the DB for articles with this theme (topic)
+
+    // Query the DB for articles with this theme (topic) and optional date range
     const conn = await require('mariadb').createConnection({
       host: process.env.DB_HOST,
       user: process.env.DB_USER,
@@ -360,25 +364,77 @@ app.get('/latest', async (req, res) => {
     });
 
     let articles;
+    let queryParams = [];
+    let whereClause = '';
+    let dateClause = '';
+
+    // Build date filtering clause if start_date and/or end_date are provided
+    if (start_date || end_date) {
+      const dateConditions = [];
+
+      if (start_date) {
+        dateConditions.push('news_date >= ?');
+        queryParams.push(new Date(start_date));
+      }
+
+      if (end_date) {
+        dateConditions.push('news_date <= ?');
+        queryParams.push(new Date(end_date));
+      }
+
+      dateClause = dateConditions.join(' AND ');
+    }
+
     if (theme === 'all') {
-      // Return all articles regardless of theme
-      articles = await conn.query(
-        'SELECT * FROM daily_news_articles ORDER BY news_date DESC, id DESC'
-      );
+      // Return all articles regardless of theme, with optional date filtering
+      if (dateClause) {
+        whereClause = `WHERE ${dateClause}`;
+        articles = await conn.query(
+          `SELECT * FROM daily_news_articles ${whereClause} ORDER BY news_date DESC, id DESC`,
+          queryParams
+        );
+      } else {
+        articles = await conn.query(
+          'SELECT * FROM daily_news_articles ORDER BY news_date DESC, id DESC'
+        );
+      }
     } else {
-      // Return articles for specific theme
-      articles = await conn.query(
-        'SELECT * FROM daily_news_articles WHERE LOWER(theme) = ? ORDER BY news_date DESC, id DESC',
-        [theme]
-      );
+      // Return articles for specific theme, with optional date filtering
+      if (dateClause) {
+        whereClause = `WHERE LOWER(theme) = ? AND ${dateClause}`;
+        queryParams.unshift(theme); // Add theme as first parameter
+        articles = await conn.query(
+          `SELECT * FROM daily_news_articles ${whereClause} ORDER BY news_date DESC, id DESC`,
+          queryParams
+        );
+      } else {
+        articles = await conn.query(
+          'SELECT * FROM daily_news_articles WHERE LOWER(theme) = ? ORDER BY news_date DESC, id DESC',
+          [theme]
+        );
+      }
     }
 
     await conn.end();
+
     if (!articles.length) {
-      return res.status(404).json({ error: `No articles found for theme: ${theme}` });
+      let errorMessage = `No articles found for theme: ${theme}`;
+      if (start_date || end_date) {
+        errorMessage += ` within the specified date range`;
+        if (start_date) errorMessage += ` (from ${start_date})`;
+        if (end_date) errorMessage += ` (to ${end_date})`;
+      }
+      return res.status(404).json({ error: errorMessage });
     }
+
     return res.json({
-      articles
+      articles,
+      filters: {
+        theme,
+        start_date: start_date || null,
+        end_date: end_date || null,
+        count: articles.length
+      }
     });
   } catch (error) {
     console.error('Error in /latest endpoint:', error.message);

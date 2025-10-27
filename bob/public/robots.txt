@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://bob.newzcomp.com/sitemap.xml
+
+# Crawl-delay for good citizenship
+Crawl-delay: 1
+
+# Block access to sensitive areas (if any)
+Disallow: /api/
+Disallow: /admin/
+Disallow: /_vite/
+Disallow: /node_modules/

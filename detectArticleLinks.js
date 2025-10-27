@@ -31,7 +31,7 @@ class Logger {
       timestamp,
       level,
       message,
-      ...data
+      ...data,
     };
     return JSON.stringify(logEntry) + '\n';
   }
@@ -49,11 +49,11 @@ class Logger {
 
     // Write to console with color coding
     const colors = {
-      INFO: '\x1b[36m',    // Cyan
-      WARN: '\x1b[33m',    // Yellow
-      ERROR: '\x1b[31m',   // Red
+      INFO: '\x1b[36m', // Cyan
+      WARN: '\x1b[33m', // Yellow
+      ERROR: '\x1b[31m', // Red
       SUCCESS: '\x1b[32m', // Green
-      DEBUG: '\x1b[35m'    // Magenta
+      DEBUG: '\x1b[35m', // Magenta
     };
     const resetColor = '\x1b[0m';
     console.log(`${colors[level] || ''}[${level}] ${message}${resetColor}`, data);
@@ -67,11 +67,21 @@ class Logger {
     }
   }
 
-  info(message, data = {}) { this.log('INFO', message, data); }
-  warn(message, data = {}) { this.log('WARN', message, data); }
-  error(message, data = {}) { this.log('ERROR', message, data); }
-  success(message, data = {}) { this.log('SUCCESS', message, data); }
-  debug(message, data = {}) { this.log('DEBUG', message, data); }
+  info(message, data = {}) {
+    this.log('INFO', message, data);
+  }
+  warn(message, data = {}) {
+    this.log('WARN', message, data);
+  }
+  error(message, data = {}) {
+    this.log('ERROR', message, data);
+  }
+  success(message, data = {}) {
+    this.log('SUCCESS', message, data);
+  }
+  debug(message, data = {}) {
+    this.log('DEBUG', message, data);
+  }
 }
 
 // Initialize logger
@@ -86,6 +96,20 @@ async function analyzeArticlesFromLinks(articleLinks, options = {}) {
   const allowedDomains = await loadAllowedDomains();
   const results = [];
   const { category = '', isBreaking = false } = options;
+  if (!articleLinks || !Array.isArray(articleLinks)) {
+    logger.error('articleLinks is not an array or is undefined', {
+      articleLinks,
+      type: typeof articleLinks,
+      isArray: Array.isArray(articleLinks),
+    });
+    return [];
+  }
+
+  if (articleLinks.length === 0) {
+    logger.warn('No article links provided');
+    return [];
+  }
+
   for (const url of articleLinks) {
     try {
       // Check if domain is allowed
@@ -189,7 +213,7 @@ async function analyzeArticlesFromLinks(articleLinks, options = {}) {
         hasTitle: !!resultData.title,
         hasSummary: !!resultData.summary,
         hasAnalysis: !!resultData.analysis.summary,
-        relatedCount: resultData.related_articles.length
+        relatedCount: resultData.related_articles.length,
       });
 
       // Validate critical fields before adding to results
@@ -210,7 +234,7 @@ async function analyzeArticlesFromLinks(articleLinks, options = {}) {
       if (validationIssues.length > 0) {
         logger.warn('Article has validation issues but will be included in results', {
           url,
-          issues: validationIssues
+          issues: validationIssues,
         });
       } else {
         logger.success('Article passed validation checks', { url });
@@ -278,20 +302,7 @@ async function getAnalysisForTopic(topic, opts = {}) {
 }
 
 // Define list of themes
-const themes = [
-  'All',
-  'Sports',
-  'Entertainment',
-  'Science',
-  'Environment',
-  'Education',
-  'Politics',
-  'Tech',
-  'Business',
-  'Health',
-  'World',
-  'Breaking'
-];
+const themes = ['All', 'Sports', 'Entertainment', 'Science', 'Environment', 'Education', 'Politics', 'Tech', 'Business', 'Health', 'World', 'Breaking'];
 
 // Run analysis for all themes
 (async () => {
@@ -334,7 +345,7 @@ const themes = [
       if (!article.analysis.summary || article.analysis.summary.length < 20) {
         logger.warn('Article missing or too short analysis summary', {
           url: article.url,
-          summaryLength: article.analysis.summary?.length || 0
+          summaryLength: article.analysis.summary?.length || 0,
         });
         return false;
       }

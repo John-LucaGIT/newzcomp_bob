@@ -27,6 +27,36 @@ function App() {
           gtag('config', 'G-X5PPN0KRWV');
         `}
         </script>
+
+        {/* Additional structured data for better SEO */}
+        <script type="application/ld+json">
+          {`
+          {
+            "@context": "https://schema.org",
+            "@type": "WebApplication",
+            "name": "Ask Bob",
+            "description": "AI-powered news analysis and bias detection platform",
+            "url": "https://bob.newzcomp.com",
+            "applicationCategory": "NewsApplication",
+            "operatingSystem": "Web Browser",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "creator": {
+              "@type": "Organization",
+              "name": "NewzComp",
+              "url": "https://www.newzcomp.com",
+              "sameAs": [
+                "https://twitter.com/newzcomp",
+                "https://www.instagram.com/newzcomp",
+                "https://www.linkedin.com/company/newzcomp"
+              ]
+            }
+          }
+          `}
+        </script>
       </Helmet>
       <div className="min-h-screen bg-gray-100">
         <BrowserRouter>

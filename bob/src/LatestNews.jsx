@@ -48,6 +48,30 @@ function LatestNews() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Date range state (defaults to last 30 days)
+  const getDefaultDateRange = () => {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30);
+
+    return {
+      start: startDate.toISOString().split('T')[0],
+      end: endDate.toISOString().split('T')[0]
+    };
+  };
+
+  const [dateRange, setDateRange] = useState(() => {
+    const saved = localStorage.getItem('latestNewsDateRange');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return getDefaultDateRange();
+      }
+    }
+    return getDefaultDateRange();
+  });
+
   // Initialize state from localStorage once. After this, state is the single source of truth.
   const [selectedTheme, setSelectedTheme] = useState(
     () => localStorage.getItem('latestNewsTheme') || 'all'
@@ -76,7 +100,7 @@ function LatestNews() {
     { value: 'all', label: 'All Topics', icon: '🌐' },
     { value: 'politics', label: 'Politics', icon: '🏛️' },
     { value: 'business', label: 'Business', icon: '💼' },
-    { value: 'technology', label: 'Technology', icon: '💻' },
+    { value: 'tech', label: 'Technology', icon: '💻' },
     { value: 'health', label: 'Health', icon: '🏥' },
     { value: 'science', label: 'Science', icon: '🔬' },
     { value: 'sports', label: 'Sports', icon: '⚽' },
@@ -93,8 +117,9 @@ function LatestNews() {
       setError('');
 
       const now = Date.now();
-      const lastRefreshTime = lastRefresh[selectedTheme];
-      const cachedData = cache[selectedTheme];
+      const cacheKey = `${selectedTheme}_${dateRange.start}_${dateRange.end}`;
+      const lastRefreshTime = lastRefresh[cacheKey];
+      const cachedData = cache[cacheKey];
 
       // Decision is based on STATE, not direct localStorage reads
       if (cachedData && lastRefreshTime && (now - lastRefreshTime) < CACHE_EXPIRATION) {
@@ -104,7 +129,12 @@ function LatestNews() {
       }
 
       try {
-        const response = await fetch(`${API_BASE}/latest?theme=${encodeURIComponent(selectedTheme)}`);
+        // Format dates for API (ISO format with time)
+        const startDateTime = `${dateRange.start}T00:00:00Z`;
+        const endDateTime = `${dateRange.end}T23:59:59Z`;
+
+        const url = `${API_BASE}/latest?theme=${encodeURIComponent(selectedTheme)}&start_date=${encodeURIComponent(startDateTime)}&end_date=${encodeURIComponent(endDateTime)}`;
+        const response = await fetch(url);
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
@@ -115,8 +145,8 @@ function LatestNews() {
         const fetchedArticles = data.articles || [];
 
         setArticles(fetchedArticles);
-        setCache(prev => ({ ...prev, [selectedTheme]: fetchedArticles }));
-        setLastRefresh(prev => ({ ...prev, [selectedTheme]: now }));
+        setCache(prev => ({ ...prev, [cacheKey]: fetchedArticles }));
+        setLastRefresh(prev => ({ ...prev, [cacheKey]: now }));
 
       } catch (err) {
         setError(err.message);
@@ -127,7 +157,7 @@ function LatestNews() {
     };
 
     fetchThemeData();
-  }, [selectedTheme, lastRefresh]); // Re-fetches if theme changes OR if lastRefresh is changed (for manual refresh)
+  }, [selectedTheme, dateRange, lastRefresh, API_BASE, CACHE_EXPIRATION, cache]); // Re-fetches if theme, date range changes OR if lastRefresh is changed (for manual refresh)
 
 
   // --- LOCALSTORAGE PERSISTENCE ---
@@ -144,15 +174,46 @@ function LatestNews() {
     localStorage.setItem('latestNewsRefresh', JSON.stringify(lastRefresh));
   }, [lastRefresh]);
 
+  useEffect(() => {
+    localStorage.setItem('latestNewsDateRange', JSON.stringify(dateRange));
+  }, [dateRange]);
+
 
   // --- EVENT HANDLERS ---
   const handleThemeChange = (theme) => {
     setSelectedTheme(theme);
   };
 
+  const handleDateRangeChange = (field, value) => {
+    setDateRange(prev => {
+      const newRange = { ...prev, [field]: value };
+
+      // Ensure start date is not after end date
+      if (field === 'start' && new Date(value) > new Date(prev.end)) {
+        newRange.end = value;
+      } else if (field === 'end' && new Date(value) < new Date(prev.start)) {
+        newRange.start = value;
+      }
+
+      return newRange;
+    });
+  };
+
+  const setDateRangePreset = (days) => {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    setDateRange({
+      start: startDate.toISOString().split('T')[0],
+      end: endDate.toISOString().split('T')[0]
+    });
+  };
+
   const forceRefresh = () => {
-    // This invalidates the cache for the current theme, triggering the fetch effect to run again.
-    setLastRefresh(prev => ({ ...prev, [selectedTheme]: 0 }));
+    // This invalidates the cache for the current theme and date range, triggering the fetch effect to run again.
+    const cacheKey = `${selectedTheme}_${dateRange.start}_${dateRange.end}`;
+    setLastRefresh(prev => ({ ...prev, [cacheKey]: 0 }));
   };
 
   const formatDate = (dateString) => {
@@ -194,7 +255,7 @@ function LatestNews() {
         </div>
 
         {/* Theme Filter Section */}
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="bg-white rounded-2xl shadow-md p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-gray-800 text-center flex-1">
@@ -224,6 +285,69 @@ function LatestNews() {
                   <span>{theme.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Date Range Filter Section */}
+        <div className="mb-8">
+          <div className="bg-white rounded-2xl shadow-md p-6">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4 text-center">
+              📅 Date Range
+            </h2>
+
+            {/* Quick Date Presets */}
+            <div className="flex flex-wrap justify-center gap-2 mb-4">
+              {[
+                { days: 1, label: 'Today' },
+                { days: 7, label: 'Last 7 days' },
+                { days: 30, label: 'Last 30 days' },
+                { days: 90, label: 'Last 3 months' }
+              ].map((preset) => (
+                <button
+                  key={preset.days}
+                  onClick={() => setDateRangePreset(preset.days)}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm font-medium"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Date Inputs */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <div className="flex items-center space-x-2">
+                <label htmlFor="start-date" className="text-sm font-medium text-gray-700">
+                  From:
+                </label>
+                <input
+                  id="start-date"
+                  type="date"
+                  value={dateRange.start}
+                  onChange={(e) => handleDateRangeChange('start', e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <label htmlFor="end-date" className="text-sm font-medium text-gray-700">
+                  To:
+                </label>
+                <input
+                  id="end-date"
+                  type="date"
+                  value={dateRange.end}
+                  onChange={(e) => handleDateRangeChange('end', e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Date Range Summary */}
+            <div className="mt-4 text-center">
+              <span className="text-sm text-gray-600">
+                Showing articles from <strong>{new Date(dateRange.start).toLocaleDateString()}</strong> to <strong>{new Date(dateRange.end).toLocaleDateString()}</strong>
+              </span>
             </div>
           </div>
         </div>
@@ -340,7 +464,7 @@ function LatestNews() {
             <div className="inline-flex items-center space-x-2 bg-green-50 text-green-700 px-4 py-2 rounded-full text-sm">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span>
-                {`Last updated: ${new Date(lastRefresh[selectedTheme] || Date.now()).toLocaleTimeString()}`}
+                {`Last updated: ${new Date(lastRefresh[`${selectedTheme}_${dateRange.start}_${dateRange.end}`] || Date.now()).toLocaleTimeString()}`}
               </span>
             </div>
           </div>

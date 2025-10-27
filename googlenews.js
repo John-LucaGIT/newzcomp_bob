@@ -126,25 +126,32 @@ async function findRelevantArticleFromSection(sectionUrl, searchQuery) {
     const document = dom.window.document;
 
     // Extract all potential article links with their context
+    // Extract all potential article links with their context, removing duplicates
+    const seenLinks = new Set();
     const linkCandidates = Array.from(document.querySelectorAll('a'))
       .map(link => {
-        const href = link.href;
-        const text = link.textContent?.trim() || '';
-        const parent = link.parentElement;
-        const context = parent?.textContent?.trim()?.substring(0, 200) || '';
+      const href = link.href;
+      const text = link.textContent?.trim() || '';
+      const parent = link.parentElement;
+      const context = parent?.textContent?.trim()?.substring(0, 200) || '';
 
-        return { href, text, context };
+      return { href, text, context };
       })
       .filter(item =>
-        item.href &&
-        item.href.startsWith('http') &&
-        item.href !== sectionUrl &&
-        !item.href.includes('#') &&
-        !/\.(jpg|jpeg|png|gif|svg|pdf)$/i.test(item.href) &&
-        !isGeneralSectionPage(item.href) && // Exclude other section pages
-        item.text.length > 10 // Meaningful link text
+      item.href &&
+      item.href.startsWith('http') &&
+      item.href !== sectionUrl &&
+      !item.href.includes('#') &&
+      !/\.(jpg|jpeg|png|gif|svg|pdf)$/i.test(item.href) &&
+      !isGeneralSectionPage(item.href) && // Exclude other section pages
+      item.text.length > 10 // Meaningful link text
       )
-      .slice(0, 20); // Limit to top 20 candidates
+      .filter(item => {
+      if (seenLinks.has(item.href)) return false;
+      seenLinks.add(item.href);
+      return true;
+      })
+      .slice(0, 80); // Limit to top 80 candidates
 
     if (linkCandidates.length === 0) {
       console.warn(`No article candidates found on ${sectionUrl}`);
@@ -175,6 +182,7 @@ async function processSearchResults(items, searchQuery) {
 
   const seenDomains = new Set();
   const processedResults = [];
+  console.log('Search result items:', items);
 
   for (const item of items) {
     try {
