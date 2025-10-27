@@ -77,6 +77,10 @@ function LatestNews() {
     () => localStorage.getItem('latestNewsTheme') || 'all'
   );
 
+  // Collapsible panel states
+  const [isTopicSelectorExpanded, setIsTopicSelectorExpanded] = useState(false);
+  const [isDateRangeExpanded, setIsDateRangeExpanded] = useState(false);
+
   const [cache, setCache] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('latestNewsCache') || '{}');
@@ -256,98 +260,163 @@ function LatestNews() {
 
         {/* Theme Filter Section */}
         <div className="mb-6">
-          <div className="bg-white rounded-2xl shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-800 text-center flex-1">
-                Filter by Topic
-              </h2>
-              {/* THIS IS THE ONLY CHANGE IN THE JSX: the onClick handler */}
+          <div className="bg-white rounded-2xl shadow-md">
+            {/* Collapsible Header */}
+            <div className="flex items-center justify-between p-6">
+              <button
+                onClick={() => setIsTopicSelectorExpanded(!isTopicSelectorExpanded)}
+                className="flex items-center space-x-3 text-left hover:bg-gray-50 transition-colors duration-200 rounded-xl p-2 -m-2 flex-1"
+              >
+                <h2 className="text-xl font-semibold text-gray-800">
+                  🏷️ Topic Filter
+                </h2>
+                {/* Selected topic summary when collapsed */}
+                {!isTopicSelectorExpanded && (
+                  <span className="text-sm text-gray-600 flex items-center space-x-1">
+                    <span>{availableThemes.find(theme => theme.value === selectedTheme)?.icon}</span>
+                    <span>{availableThemes.find(theme => theme.value === selectedTheme)?.label}</span>
+                  </span>
+                )}
+                {/* Chevron Icon */}
+                <svg
+                  className={`w-6 h-6 text-gray-500 transition-transform duration-200 ml-auto ${
+                    isTopicSelectorExpanded ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {/* Refresh button - always visible */}
               <button
                 onClick={forceRefresh}
-                className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition text-sm font-medium"
+                className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition text-sm font-medium ml-4"
                 title="Refresh articles"
               >
                 🔄 Refresh
               </button>
             </div>
-            <div className="flex flex-wrap justify-center gap-3">
-              {availableThemes.map((theme) => (
-                <button
-                  key={theme.value}
-                  onClick={() => handleThemeChange(theme.value)}
-                  className={`px-4 py-2 rounded-full font-medium transition-all duration-200 flex items-center space-x-2 ${
-                    selectedTheme === theme.value
-                      ? 'bg-blue-600 text-white shadow-lg scale-105'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:scale-105'
-                  }`}
-                >
-                  <span>{theme.icon}</span>
-                  <span>{theme.label}</span>
-                </button>
-              ))}
+
+            {/* Collapsible Content */}
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+              isTopicSelectorExpanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+              <div className="px-6 pb-6">
+                <div className="flex flex-wrap justify-center gap-3">
+                  {availableThemes.map((theme) => (
+                    <button
+                      key={theme.value}
+                      onClick={() => handleThemeChange(theme.value)}
+                      className={`px-4 py-2 rounded-full font-medium transition-all duration-200 flex items-center space-x-2 ${
+                        selectedTheme === theme.value
+                          ? 'bg-blue-600 text-white shadow-lg scale-105'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:scale-105'
+                      }`}
+                    >
+                      <span>{theme.icon}</span>
+                      <span>{theme.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Date Range Filter Section */}
         <div className="mb-8">
-          <div className="bg-white rounded-2xl shadow-md p-6">
-            <h2 className="text-xl font-semibold text-gray-800 mb-4 text-center">
-              📅 Date Range
-            </h2>
-
-            {/* Quick Date Presets */}
-            <div className="flex flex-wrap justify-center gap-2 mb-4">
-              {[
-                { days: 1, label: 'Today' },
-                { days: 7, label: 'Last 7 days' },
-                { days: 30, label: 'Last 30 days' },
-                { days: 90, label: 'Last 3 months' }
-              ].map((preset) => (
-                <button
-                  key={preset.days}
-                  onClick={() => setDateRangePreset(preset.days)}
-                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm font-medium"
+          <div className="bg-white rounded-2xl shadow-md">
+            {/* Collapsible Header */}
+            <button
+              onClick={() => setIsDateRangeExpanded(!isDateRangeExpanded)}
+              className="w-full p-6 flex items-center justify-between text-left hover:bg-gray-50 transition-colors duration-200 rounded-2xl"
+            >
+              <h2 className="text-xl font-semibold text-gray-800">
+                📅 Date Range Filter
+              </h2>
+              <div className="flex items-center space-x-3">
+                {/* Date Range Summary when collapsed */}
+                {!isDateRangeExpanded && (
+                  <span className="text-sm text-gray-600">
+                    {new Date(dateRange.start).toLocaleDateString()} - {new Date(dateRange.end).toLocaleDateString()}
+                  </span>
+                )}
+                {/* Chevron Icon */}
+                <svg
+                  className={`w-6 h-6 text-gray-500 transition-transform duration-200 ${
+                    isDateRangeExpanded ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Custom Date Inputs */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <div className="flex items-center space-x-2">
-                <label htmlFor="start-date" className="text-sm font-medium text-gray-700">
-                  From:
-                </label>
-                <input
-                  id="start-date"
-                  type="date"
-                  value={dateRange.start}
-                  onChange={(e) => handleDateRangeChange('start', e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
               </div>
+            </button>
 
-              <div className="flex items-center space-x-2">
-                <label htmlFor="end-date" className="text-sm font-medium text-gray-700">
-                  To:
-                </label>
-                <input
-                  id="end-date"
-                  type="date"
-                  value={dateRange.end}
-                  onChange={(e) => handleDateRangeChange('end', e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            {/* Collapsible Content */}
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+              isDateRangeExpanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+              <div className="px-6 pb-6">
+                {/* Quick Date Presets */}
+                <div className="flex flex-wrap justify-center gap-2 mb-4">
+                  {[
+                    { days: 1, label: 'Today' },
+                    { days: 7, label: 'Last 7 days' },
+                    { days: 30, label: 'Last 30 days' },
+                    { days: 90, label: 'Last 3 months' }
+                  ].map((preset) => (
+                    <button
+                      key={preset.days}
+                      onClick={() => setDateRangePreset(preset.days)}
+                      className="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm font-medium"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Date Inputs */}
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                  <div className="flex items-center space-x-2">
+                    <label htmlFor="start-date" className="text-sm font-medium text-gray-700">
+                      From:
+                    </label>
+                    <input
+                      id="start-date"
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(e) => handleDateRangeChange('start', e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <label htmlFor="end-date" className="text-sm font-medium text-gray-700">
+                      To:
+                    </label>
+                    <input
+                      id="end-date"
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(e) => handleDateRangeChange('end', e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                {/* Date Range Summary when expanded */}
+                <div className="mt-4 text-center">
+                  <span className="text-sm text-gray-600">
+                    Showing articles from <strong>{new Date(dateRange.start).toLocaleDateString()}</strong> to <strong>{new Date(dateRange.end).toLocaleDateString()}</strong>
+                  </span>
+                </div>
               </div>
-            </div>
-
-            {/* Date Range Summary */}
-            <div className="mt-4 text-center">
-              <span className="text-sm text-gray-600">
-                Showing articles from <strong>{new Date(dateRange.start).toLocaleDateString()}</strong> to <strong>{new Date(dateRange.end).toLocaleDateString()}</strong>
-              </span>
             </div>
           </div>
         </div>
