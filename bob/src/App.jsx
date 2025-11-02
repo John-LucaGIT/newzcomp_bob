@@ -5,6 +5,7 @@ import ArticleHistory from './ArticleHistory';
 import FeedbackPage from './FeedbackPage';
 import LatestNews from './LatestNews';
 import ArticlePage from './components/ArticlePage';
+import FAQPage from './FAQPage';
 import { Helmet } from 'react-helmet';
 
 function App() {
@@ -90,6 +91,9 @@ function App() {
                 <Link to="/stored-articles" className="block px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
                   History
                 </Link>
+                <Link to="/faq" className="block px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
+                  FAQ
+                </Link>
                 <Link to="/feedback" className="block px-4 py-2 text-base md:text-md font-semibold text-gray-800 hover:text-blue-600 transition" onClick={() => setMenuOpen(false)}>
                   Feedback
                 </Link>
@@ -118,6 +122,7 @@ function App() {
               <Route path="/latest" element={<LatestNews />} />
               <Route path="/stored-articles" element={<ArticleHistory />} />
               <Route path="/feedback" element={<FeedbackPage />} />
+              <Route path="/faq" element={<FAQPage />} />
               <Route path="/article/:bobid" element={<ArticlePage />} />
             </Routes>
           </div>
