@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Helmet } from 'react-helmet';
 import { Link } from 'react-router-dom';
 
 function Metadata() {
   return (
-    <Helmet>
+    <>
       <title>Bob - AI News Commentary Historic Searches</title>
       <meta name="description" content="Explore previous AI news analysis searches. You will find other users news searches and can read Bob's news analysis which includes a bias analysis for articles from the left, right and center." />
       <meta name="keywords" content="AI news analysis, news bias detection, article summaries, related news, NewzComp, Bob AI, ai news analysis, news analysis, bias detection, news comparison, democrats, republicans, poltiical news analysis, politics, news" />
@@ -18,7 +17,7 @@ function Metadata() {
       <meta name="twitter:title" content="Bob - AI News Commentary by NewzComp" />
       <meta name="twitter:description" content="Analyze news articles for bias, summaries, and related coverage with Bob, powered by NewzComp. Visit newzcomp.com for more." />
       <meta name="twitter:image" content="/assets/tricolorblack.svg" />
-    </Helmet>
+    </>
   );
 }
 
@@ -45,9 +44,6 @@ function ArticleHistory() {
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-3 py-12 mt-5 md:mt-0">
       <Metadata />
-      <Helmet>
-        <title>Bob - AI News Commentary Historic Searches</title>
-      </Helmet>
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-0 py-12 mt-2 md:mt-0 custom-flex-nc">
         {/* Article History */}
         {

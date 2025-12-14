@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import { Helmet } from 'react-helmet';
 
 function Metadata() {
   return (
-    <Helmet>
+    <>
       <title>Feedback for Bob - AI News Assistant by NewzComp</title>
       <meta
         name="description"
@@ -35,7 +34,7 @@ function Metadata() {
         content="Share your feedback on Bob, the AI-powered news tool by NewzComp. Help us enhance bias detection, summaries, and related news features."
       />
       <meta name="twitter:image" content="/assets/tricolorblack.svg" />
-    </Helmet>
+    </>
   );
 }
 

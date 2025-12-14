@@ -1,6 +1,5 @@
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { Helmet } from 'react-helmet';
 
 function getBiasColor(biasDirection) {
   switch (biasDirection?.toLowerCase()) {
@@ -116,23 +115,21 @@ function ArticlePage() {
 
   return (
     <>
-      <Helmet>
-        <title>{article.title ? `${article.title} | ${article.source_name} | Bob News Analysis by NewzComp` : 'Article - Bob News Analysis'}</title>
-        <meta name="description" content={article.analysis?.summary ? article.analysis.summary : `Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.`} />
-        <meta name="author" content={article.author || article.source_name || 'NewzComp'} />
-        <meta name="keywords" content={`news, analysis, bias, ${article.source_name}, ${article.title}, ${article.keyword}, NewzComp, Bob`} />
-        {/* Open Graph tags */}
-        <meta property="og:title" content={article.title ? `${article.title} | Bob News Analysis` : 'Article - Bob News Analysis'} />
-        <meta property="og:description" content={article.analysis?.summary || 'Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.'} />
-        <meta property="og:type" content="article" />
-        <meta property="og:url" content={`https://bob.newzcomp.com/article/${bobid}`} />
-        <meta property="og:image" content={article.image_url || "/assets/tricolorblack.svg"} />
-        {/* Twitter Card tags */}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={article.title ? `${article.title} | Bob News Analysis` : 'Article - Bob News Analysis'} />
-        <meta name="twitter:description" content={article.analysis?.summary || 'Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.'} />
-        <meta name="twitter:image" content={article.image_url || "/assets/tricolorblack.svg"} />
-      </Helmet>
+      <title>{article.title ? `${article.title} | ${article.source_name} | Bob News Analysis by NewzComp` : 'Article - Bob News Analysis'}</title>
+      <meta name="description" content={article.analysis?.summary ? article.analysis.summary : `Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.`} />
+      <meta name="author" content={article.author || article.source_name || 'NewzComp'} />
+      <meta name="keywords" content={`news, analysis, bias, ${article.source_name}, ${article.title}, ${article.keyword}, NewzComp, Bob`} />
+      {/* Open Graph tags */}
+      <meta property="og:title" content={article.title ? `${article.title} | Bob News Analysis` : 'Article - Bob News Analysis'} />
+      <meta property="og:description" content={article.analysis?.summary || 'Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.'} />
+      <meta property="og:type" content="article" />
+      <meta property="og:url" content={`https://bob.newzcomp.com/article/${bobid}`} />
+      <meta property="og:image" content={article.image_url || "/assets/tricolorblack.svg"} />
+      {/* Twitter Card tags */}
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta name="twitter:title" content={article.title ? `${article.title} | Bob News Analysis` : 'Article - Bob News Analysis'} />
+      <meta name="twitter:description" content={article.analysis?.summary || 'Read news analysis, bias summary, and related coverage for this article on Bob by NewzComp.'} />
+      <meta name="twitter:image" content={article.image_url || "/assets/tricolorblack.svg"} />
 
       <div className="flex flex-col items-center min-h-screen bg-gray-50 pt-32 pb-10 px-4">
         <h1 className="text-4xl lg:text-5xl font-bold mb-8 text-center text-gray-800">Article Analysis</h1>

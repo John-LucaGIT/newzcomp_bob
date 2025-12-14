@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, Meta } from 'react-router-dom';
 import { ClipLoader } from 'react-spinners';
-import { Helmet } from 'react-helmet';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 
 function getBiasColor(biasDirection) {
@@ -46,7 +45,7 @@ function getBiasRatingColor(rating) {
 
 function Metadata() {
   return (
-    <Helmet>
+    <>
       <title>Bob - AI News Commentary by NewzComp</title>
       <meta name="description" content="Meet Bob, your AI-powered news assistant by NewzComp. Analyze news articles for bias, get summaries, and explore related coverage. Visit newzcomp.com for more." />
       <meta name="keywords" content="AI news analysis, news bias detection, article summaries, related news, NewzComp, Bob AI, News Comparison, AI NEWS COMPARISON" />
@@ -60,7 +59,7 @@ function Metadata() {
       <meta name="twitter:title" content="Bob - AI News Commentary by NewzComp" />
       <meta name="twitter:description" content="Analyze news articles for bias, summaries, and related coverage with Bob, powered by NewzComp. Visit newzcomp.com for more." />
       <meta name="twitter:image" content="/assets/tricolorblack.svg" />
-    </Helmet>
+    </>
   );
 }
 
@@ -138,10 +137,6 @@ function MainPage() {
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-6 py-12 mt-5 md:mt-0">
       <Metadata />
-      <Helmet>
-        <title>Bob - AI News Commentary by NewzComp</title>
-        <meta name="description" content="Meet Bob, your AI-powered news assistant..." />
-      </Helmet>
       {/* Example: */}
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-6 py-12 mt-2 md:mt-0">
         {/* Main Content */}

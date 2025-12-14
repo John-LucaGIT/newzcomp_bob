@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Helmet } from 'react-helmet';
 
 function FAQPage() {
   const [openQuestion, setOpenQuestion] = useState(null);
@@ -143,7 +142,7 @@ function FAQPage() {
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center font-sans px-3 py-26 md:py-38 mt-5 md:mt-0">
-      <Helmet>
+      <head>
         <title>FAQ - News Bias Detection & AI Analysis Questions | NewzComp Bob</title>
         <meta name="description" content="Answers to common questions about media bias, AI-powered news analysis, how NewzComp works, and tips for becoming a more informed news consumer. Learn about bias detection, media literacy, and critical thinking." />
         <meta name="keywords" content="media bias FAQ, news analysis questions, AI bias detection, how does NewzComp work, media literacy, fake news detection, echo chambers, political bias, news comparison, Bob AI, misinformation, fact checking, critical thinking, journalism ethics" />
@@ -223,7 +222,7 @@ function FAQPage() {
             ]
           })}
         </script>
-      </Helmet>
+      </head>
 
       <div className="w-full max-w-4xl">
         {/* Header Section */}

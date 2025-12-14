@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Helmet } from 'react-helmet';
 import { Link } from 'react-router-dom';
 import { ClipLoader } from 'react-spinners';
 
@@ -7,7 +6,7 @@ import { ClipLoader } from 'react-spinners';
 
 function Metadata() {
   return (
-    <Helmet>
+    <>
       <title>Latest Breaking News - Bob AI Analysis</title>
       <meta name="description" content="Stay updated with the latest breaking news analyzed by Bob AI. Filter by topic and explore comprehensive bias analysis, summaries, and related coverage." />
       <meta name="keywords" content="latest news, breaking news, AI news analysis, news bias detection, real-time news, NewzComp, Bob AI, politics, business, technology" />
@@ -21,7 +20,7 @@ function Metadata() {
       <meta name="twitter:title" content="Latest Breaking News - Bob AI Analysis" />
       <meta name="twitter:description" content="Stay informed with the latest breaking news analyzed by Bob AI. Filter by topic and explore comprehensive coverage." />
       <meta name="twitter:image" content="/assets/tricolorblack.svg" />
-    </Helmet>
+    </>
   );
 }
 

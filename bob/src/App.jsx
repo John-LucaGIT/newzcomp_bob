@@ -6,7 +6,6 @@ import FeedbackPage from './FeedbackPage';
 import LatestNews from './LatestNews';
 import ArticlePage from './components/ArticlePage';
 import FAQPage from './FAQPage';
-import { Helmet } from 'react-helmet';
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -18,7 +17,7 @@ function App() {
   return (
     <>
       {/* Metadata for SEO and social sharing */}
-      <Helmet>
+      <head>
         <script async src="https://www.googletagmanager.com/gtag/js?id=G-X5PPN0KRWV"></script>
         <script>
           {`
@@ -58,7 +57,7 @@ function App() {
           }
           `}
         </script>
-      </Helmet>
+      </head>
       <div className="min-h-screen bg-gray-100">
         <BrowserRouter>
           {/* Responsive Header */}

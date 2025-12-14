@@ -11,3 +11,4 @@ AuthKey*
 send_test*
 test_latest_news.sh
 test*
+copy-certs-hook.sh
